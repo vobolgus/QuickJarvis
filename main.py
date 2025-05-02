@@ -12,8 +12,8 @@ from utils import logger, clean_temp_files, check_ffmpeg_installed, get_device
 from recording import record_audio
 from transcription import WhisperTranscriber
 from analysis import GemmaAnalyzer
-from tts import BarkTTS
 from playback import play_audio
+from tts import SystemTTS
 
 
 def main() -> int:
@@ -60,8 +60,10 @@ def main() -> int:
             if user_input.lower() != 'y':
                 return 1
 
-        # Initialize Bark model for text-to-speech
-        tts = BarkTTS(device=device)
+        # Initialize TTS system with auto-fallback
+        tts = SystemTTS(
+            language="ru" if analyzer.system_prompt and "русский" in analyzer.system_prompt.lower() else "en"
+        )
 
         # Main application loop
         response_files: List[str] = []  # Keep track of response files for cleanup

@@ -1,21 +1,21 @@
  # Project Task List
 
  ## Setup & Infrastructure
- - [ ] Create `requirements.txt` or `pyproject.toml` to pin dependencies.
+ - [x] Create `requirements.txt` to pin dependencies.
  - [ ] Add a `.gitignore` to exclude temporary files and artifacts (e.g., `*.wav`).
  - [ ] Provide guidelines for setting up a Python virtual environment.
 
  ## Code Refactoring
- - [ ] Split `main.py` into dedicated modules:
+ - [x] Split `main.py` into dedicated modules:
    - `recording.py` (audio capture)
    - `transcription.py` (Whisper integration)
    - `analysis.py` (Gemma API calls)
    - `tts.py` (Bark integration)
    - `playback.py` (audio playback)
    - `utils.py` (common helpers)
- - [ ] Use context managers for file and audio stream handling.
- - [ ] Introduce type hints and comprehensive docstrings.
- - [ ] Replace direct `print` calls with the `logging` module and configurable verbosity.
+ - [x] Use context managers for file and audio stream handling.
+ - [x] Introduce type hints and comprehensive docstrings.
+ - [x] Replace direct `print` calls with the `logging` module and configurable verbosity.
 
  ## Configuration & CLI
  - [ ] Integrate `argparse` to expose options:
@@ -43,5 +43,6 @@
  ## Continuous Improvement
  - [ ] Implement real-time streaming transcription and analysis.
  - [ ] Add multi-language detection and support for additional languages.
+ - [ ] Add conversation memory to maintain context across turns.
  - [ ] Improve error handling with retry logic and user-friendly messages.
  - [ ] Explore a plugin system to enable community-driven extensions.

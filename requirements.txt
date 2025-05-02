@@ -14,7 +14,6 @@ requests>=2.28.0
 
 # Additional dependencies for Whisper, Bark models
 accelerate>=0.20.0
-sentencepiece>=0.1.99
 ffmpeg-python>=0.2.0
 
 # Development dependencies

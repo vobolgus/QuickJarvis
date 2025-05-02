@@ -10,29 +10,11 @@ from utils import logger
 
 # Default LMStudio configuration
 DEFAULT_LMSTUDIO_API_URL = "http://localhost:1234/v1/chat/completions"
-DEFAULT_SYSTEM_PROMPT = """Ты - дружелюбный виртуальный ассистент, созданный чтобы помогать людям. Вот твои основные принципы:
-
-1. Ты всегда спокоен, терпелив и вежлив, независимо от того, как пользователь общается с тобой.
-
-2. Ты отвечаешь ясно и лаконично, избегая слишком длинных и сложных объяснений, когда в них нет необходимости.
-
-3. Твой тон - тёплый и дружелюбный, но профессиональный. Ты создаёшь ощущение комфортного разговора.
-
-4. Когда пользователь задаёт вопрос, ты даёшь конкретный ответ без лишних вступлений или отступлений.
-
-5. Если ты не знаешь ответа или не можешь выполнить запрос, ты честно сообщаешь об этом и предлагаешь альтернативные решения, если это возможно.
-
-6. Ты уважаешь время пользователя - твои ответы информативны, но не избыточны.
-
-7. Ты не используешь смайлики или эмодзи в своих ответах, только текст.
-
-8. Ты способен поддержать как деловую беседу, так и повседневный разговор, адаптируя свой стиль к контексту.
-
-9. Ты никогда не осуждаешь пользователя и относишься с пониманием к любым затруднениям или ошибкам.
-
-10. Твоя цель - сделать общение с технологией максимально естественным, приятным и полезным для каждого пользователя.
-
-Отвечай так, как если бы ты был умным, знающим и отзывчивым другом, который хочет помочь."""
+# Enhanced system prompt for better context handling and memory
+DEFAULT_SYSTEM_PROMPT = (
+    "You are a helpful, context-aware AI assistant that remembers previous user interactions "
+    "and your own responses. Provide concise, accurate, and informative answers. /no_think"
+)
 
 class GemmaAnalyzer:
     """
@@ -51,6 +33,8 @@ class GemmaAnalyzer:
         """
         self.api_url = api_url
         self.system_prompt = system_prompt
+        # Initialize conversation history with system prompt
+        self.history = [{"role": "system", "content": self.system_prompt}]
         logger.info(f"Initialized Gemma analyzer with API URL: {api_url}")
     
     def check_connection(self) -> bool:
@@ -88,35 +72,35 @@ class GemmaAnalyzer:
         Returns:
             Analysis result as text, or None if the analysis failed
         """
+        # Add user message to history and send full conversation
         try:
             logger.info(f"Analyzing text with Gemma (length: {len(text)} chars)")
-            
+            self.history.append({"role": "user", "content": text})
+
             payload = {
-                "model": "gemma",  # This might need adjustment based on LMStudio configuration
-                "messages": [
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": f"Analyze this transcribed speech: \"{text}\""}
-                ],
+                "model": "qwen3-4b",  # Adjust based on LMStudio configuration if needed
+                "messages": self.history,
                 "temperature": temperature,
                 "max_tokens": max_tokens
             }
-            
-            headers = {
-                "Content-Type": "application/json"
-            }
-            
+            headers = {"Content-Type": "application/json"}
             logger.debug(f"Sending request to LMStudio API: {json.dumps(payload)}")
             response = requests.post(self.api_url, json=payload, headers=headers, timeout=30)
-            
+
             if response.status_code == 200:
                 result = response.json()
                 analysis = result["choices"][0]["message"]["content"]
                 logger.info("Analysis completed successfully")
+                # Store assistant response in history
+                self.history.append({"role": "assistant", "content": analysis})
                 return analysis
             else:
+                err = f"Error connecting to LMStudio: {response.status_code} - {response.text}"
                 logger.error(f"Error from LMStudio API: {response.status_code} - {response.text}")
-                return f"Error connecting to LMStudio: {response.status_code} - {response.text}"
-                
+                self.history.append({"role": "assistant", "content": err})
+                return err
         except Exception as e:
-            logger.error(f"Error analyzing with Gemma: {str(e)}")
-            return f"Error analyzing with Gemma: {str(e)}"
+            err = f"Error analyzing with Gemma: {str(e)}"
+            logger.error(err)
+            self.history.append({"role": "assistant", "content": err})
+            return err
