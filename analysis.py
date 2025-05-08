@@ -35,7 +35,7 @@ class GemmaAnalyzer:
         self.system_prompt = system_prompt
         # Initialize conversation history with system prompt
         self.history = [{"role": "system", "content": self.system_prompt}]
-        logger.info(f"Initialized Gemma analyzer with API URL: {api_url}")
+        logger.debug(f"Initialized Gemma analyzer with API URL: {api_url}")
 
     def check_connection(self) -> bool:
         """
@@ -49,7 +49,7 @@ class GemmaAnalyzer:
             base_url = self.api_url.rsplit('/', 1)[0]
             response = requests.get(base_url, timeout=5)
             if response.status_code < 500:  # Any response that's not a server error
-                logger.info("Successfully connected to LMStudio API")
+                logger.debug("Successfully connected to LMStudio API")
                 return True
             logger.warning(f"LMStudio API returned status code: {response.status_code}")
             return False
@@ -74,7 +74,7 @@ class GemmaAnalyzer:
         """
         # Add user message to history and send full conversation
         try:
-            logger.info(f"Analyzing text with Gemma (length: {len(text)} chars)")
+            logger.debug(f"Analyzing text with Gemma (length: {len(text)} chars)")
             self.history.append({"role": "user", "content": text})
 
             payload = {
@@ -90,7 +90,7 @@ class GemmaAnalyzer:
             if response.status_code == 200:
                 result = response.json()
                 analysis = result["choices"][0]["message"]["content"]
-                logger.info("Analysis completed successfully")
+                logger.debug("Analysis completed successfully")
                 # Store assistant response in history
                 self.history.append({"role": "assistant", "content": analysis})
                 return analysis
@@ -98,9 +98,9 @@ class GemmaAnalyzer:
                 err = f"Error connecting to LMStudio: {response.status_code} - {response.text}"
                 logger.error(f"Error from LMStudio API: {response.status_code} - {response.text}")
                 self.history.append({"role": "assistant", "content": err})
-                return err
+                return err # Return error message to be potentially spoken or handled
         except Exception as e:
             err = f"Error analyzing with Gemma: {str(e)}"
             logger.error(err)
             self.history.append({"role": "assistant", "content": err})
-            return err
+            return err # Return error message

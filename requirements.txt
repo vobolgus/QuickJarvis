@@ -6,18 +6,6 @@ numpy>=1.20.0
 # Audio processing
 pyaudio>=0.2.13
 wave>=0.0.2
-soundfile>=0.12.1
-scipy>=1.10.0
 
 # HTTP and API
 requests>=2.28.0
-
-# Additional dependencies for Whisper, Bark models
-accelerate>=0.20.0
-ffmpeg-python>=0.2.0
-
-# Development dependencies
-pytest>=7.3.1
-black>=23.3.0
-flake8>=6.0.0
-isort>=5.12.0

@@ -77,7 +77,7 @@ def record_audio(record_seconds: int = DEFAULT_RECORD_SECONDS,
                 channels: int = DEFAULT_CHANNELS,
                 rate: int = DEFAULT_RATE,
                 chunk: int = DEFAULT_CHUNK,
-                input_device_index: Optional[int] = None) -> str:
+                input_device_index: Optional[int] = None) -> Optional[str]:
     """
     Record audio from microphone and save to a temporary file.
 
@@ -90,13 +90,18 @@ def record_audio(record_seconds: int = DEFAULT_RECORD_SECONDS,
         input_device_index: Optional specific microphone index.
 
     Returns:
-        Path to the saved audio file
+        Path to the saved audio file, or None on failure.
     """
     if not os.path.exists(TEMP_FILE_DIR):
-        os.makedirs(TEMP_FILE_DIR)
-        logger.info(f"Created directory for temporary recordings: {TEMP_FILE_DIR}")
+        try:
+            os.makedirs(TEMP_FILE_DIR)
+            logger.debug(f"Created directory for temporary recordings: {TEMP_FILE_DIR}")
+        except OSError as e:
+            logger.error(f"Could not create temp directory {TEMP_FILE_DIR}: {e}")
+            return None
 
-    logger.info("Recording will start in 2 seconds...")
+
+    print("🎙️ Get ready to speak in 2 seconds...")
     time.sleep(2)
 
     frames: List[bytes] = []
@@ -104,46 +109,58 @@ def record_audio(record_seconds: int = DEFAULT_RECORD_SECONDS,
     with audio_interface() as audio:
         if input_device_index is None:
             try:
-                # Try to get default input device info for logging
                 device_info = audio.get_default_input_device_info()
-                logger.info(f"Using default input device: {device_info['name']}")
+                logger.debug(f"Using default input device: {device_info['name']}")
             except IOError:
                 logger.warning("Could not get default input device info. Using system default.")
         else:
              try:
                 device_info = audio.get_device_info_by_index(input_device_index)
-                logger.info(f"Using specified input device: {device_info['name']} (Index: {input_device_index})")
+                logger.debug(f"Using specified input device: {device_info['name']} (Index: {input_device_index})")
              except IOError:
                 logger.error(f"Invalid input device index: {input_device_index}. Falling back to default.")
                 input_device_index = None # Fallback
 
-        logger.info("Recording... Speak now!")
+        print("🔴 Recording... Speak now!")
         with audio_stream(audio, audio_format, channels, rate, chunk, input_device_index) as stream:
             for _ in range(0, int(rate / chunk * record_seconds)):
-                data = stream.read(chunk)
+                data = stream.read(chunk, exception_on_overflow=False) # Added exception_on_overflow=False for robustness
                 frames.append(data)
 
-        logger.info("Recording finished!")
+        print("✅ Recording finished!")
 
         timestamp = get_timestamp()
         temp_filename = os.path.join(TEMP_FILE_DIR, f"recording_{timestamp}.wav")
 
-        with wave.open(temp_filename, 'wb') as wf:
-            wf.setnchannels(channels)
-            wf.setsampwidth(audio.get_sample_size(audio_format))
-            wf.setframerate(rate)
-            wf.writeframes(b''.join(frames))
+        try:
+            with wave.open(temp_filename, 'wb') as wf:
+                wf.setnchannels(channels)
+                wf.setsampwidth(audio.get_sample_size(audio_format))
+                wf.setframerate(rate)
+                wf.writeframes(b''.join(frames))
+        except Exception as e:
+            logger.error(f"Failed to save WAV file {temp_filename}: {e}")
+            return None
 
-        logger.info(f"Audio saved to {temp_filename}")
+        logger.debug(f"Audio saved to {temp_filename}")
         return temp_filename
 
 def list_audio_devices():
     """Lists available audio input devices."""
-    logger.info("Available audio input devices:")
-    with audio_interface() as p:
-        info = p.get_host_api_info_by_index(0)
-        numdevices = info.get('deviceCount')
-        for i in range(0, numdevices):
-            device_info = p.get_device_info_by_host_api_device_index(0, i)
-            if (device_info.get('maxInputChannels')) > 0:
-                logger.info(f"  Input Device ID {i} - {device_info.get('name')}")
+    print("\nAvailable audio input devices:")
+    try:
+        with audio_interface() as p:
+            info = p.get_host_api_info_by_index(0)
+            numdevices = info.get('deviceCount')
+            found_devices = False
+            for i in range(0, numdevices):
+                device_info = p.get_device_info_by_host_api_device_index(0, i)
+                if (device_info.get('maxInputChannels')) > 0:
+                    print(f"  Input Device ID {i} - {device_info.get('name')}")
+                    found_devices = True
+            if not found_devices:
+                print("  No input devices found.")
+    except Exception as e:
+        logger.error(f"Could not list audio devices: {e}")
+        print("  Error listing audio devices.")
+    print("")
