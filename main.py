@@ -31,8 +31,8 @@ MICROPHONE_INDEX = None
 WAKE_WORD = "computer"  # Change this to your desired wake word
 # How long to record audio chunks for wake word detection (simulated - will be slow)
 WAKE_WORD_RECORD_SECONDS = 3
-# How long to record for the actual command after wake word detection
-COMMAND_RECORD_SECONDS = DEFAULT_RECORD_SECONDS # Use existing default
+# How long to record for the actual command after wake word detection (acts as a timeout for VAD)
+COMMAND_MAX_DURATION_SECONDS = 10 # Max duration for command recording with VAD
 WAKE_WORD_ACTIVATION_SOUND = "Yes?" # Sound/phrase spoken by TTS upon wake word detection
 # --- End Wake Word Configuration ---
 
@@ -53,6 +53,7 @@ def main() -> int:
     logger.debug(f"Using MODEL_PATH: {MODEL_PATH}")
     logger.info(f"IMPORTANT: Wake word detection is SIMULATED by transcribing short audio chunks ({WAKE_WORD_RECORD_SECONDS}s).")
     logger.info("This will be slow and CPU-intensive. A dedicated wake word engine is recommended for real-world use.")
+    logger.info(f"Command recording will use Voice Activity Detection (VAD) with a max duration of {COMMAND_MAX_DURATION_SECONDS}s.")
 
 
     if "--list-devices" in sys.argv:
@@ -97,11 +98,12 @@ def main() -> int:
         while True:
             print(f"\n👂 Listening for wake word '{WAKE_WORD}'...")
 
-            # Record a short audio chunk for wake word detection
+            # Record a short audio chunk for wake word detection (fixed duration)
             audio_chunk_file = record_audio(
                 record_seconds=WAKE_WORD_RECORD_SECONDS,
                 input_device_index=MICROPHONE_INDEX,
-                suppress_prints=True # Suppress "Recording..." messages for wake word chunks
+                suppress_prints=True, # Suppress "Recording..." messages for wake word chunks
+                use_vad=False # Fixed duration for wake word
             )
 
             if not audio_chunk_file:
@@ -134,22 +136,32 @@ def main() -> int:
                     if ack_speech_file:
                         response_files.append(ack_speech_file)
 
-                print(f"🗣️ Listening for your command ({COMMAND_RECORD_SECONDS}s)...")
+                # For command recording, use VAD.
+                # record_seconds here acts as the max_duration/timeout for VAD.
                 command_audio_file = record_audio(
-                    record_seconds=COMMAND_RECORD_SECONDS,
+                    record_seconds=COMMAND_MAX_DURATION_SECONDS,
                     input_device_index=MICROPHONE_INDEX,
-                    suppress_prints=False # Show "Recording..." messages for command
+                    suppress_prints=False, # Show VAD messages like "Listening for speech..."
+                    use_vad=True
                 )
 
                 if not command_audio_file:
-                    logger.error("Command audio recording failed.")
-                    print("Sorry, I couldn't record your command. Listening for wake word again.")
+                    logger.error("Command audio recording failed or no speech detected.")
+                    # Message already printed by record_audio if VAD fails due to no speech
+                    # print("Sorry, I couldn't record your command (no speech detected or error). Listening for wake word again.")
                     continue # Go back to wake word listening
 
                 transcription_command = ""
                 try:
                     logger.debug("Transcribing command with whisper.cpp...")
                     transcription_command = transcriber.get_transcription_text(command_audio_file)
+
+                    if not transcription_command.strip():
+                        logger.info("Transcription resulted in empty text. Assuming no command was given.")
+                        print("You didn't say anything? Listening for wake word again.")
+                        if os.path.exists(command_audio_file): os.remove(command_audio_file)
+                        continue
+
                     print(f"\nYOU: \"{transcription_command}\"")
 
                     if transcription_command.strip().lower() == "exit":

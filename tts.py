@@ -189,9 +189,11 @@ class SystemTTS:
             if success:
                 logger.debug(f"Direct speech synthesis completed in {end_time - start_time:.2f} seconds")
                 # Create a dummy marker file for cleanup logic compatibility
-                with open(output_marker_filename, 'w') as f:
+                os.makedirs("temp_tts_markers", exist_ok=True) # Ensure dir exists
+                output_marker_filepath = os.path.join("temp_tts_markers", output_marker_filename)
+                with open(output_marker_filepath, 'w') as f:
                     f.write(f"Marker for directly played TTS audio at {timestamp}.")
-                return output_marker_filename
+                return output_marker_filepath # Return full path
             else:
                 logger.error("Direct speech synthesis failed or was not attempted for this platform.")
                 return None

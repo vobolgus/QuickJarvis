@@ -41,7 +41,7 @@ def setup_logging(logger_level: int = logging.DEBUG, console_level: int = loggin
     return current_logger
 
 # Create the logger: Process DEBUG and above, but console only shows WARNING and above by default
-logger = setup_logging(logger_level=logging.DEBUG, console_level=logging.WARNING)
+logger = setup_logging(logger_level=logging.DEBUG, console_level=logging.INFO) # Changed console to INFO for VAD messages
 
 def get_timestamp() -> str:
     """
@@ -138,3 +138,13 @@ def clean_temp_files(file_paths: List[Optional[str]]) -> None:
                 logger.debug(f"Removed temporary file: {file_path}")
         except Exception as e:
             logger.warning(f"Failed to remove temporary file {file_path}: {e}")
+
+    # Clean up dummy TTS marker directory if it's empty
+    tts_marker_dir = "temp_tts_markers"
+    if os.path.exists(tts_marker_dir):
+        try:
+            if not os.listdir(tts_marker_dir): # Check if empty
+                os.rmdir(tts_marker_dir)
+                logger.debug(f"Removed empty temporary TTS marker directory: {tts_marker_dir}")
+        except Exception as e:
+            logger.warning(f"Failed to remove temporary TTS marker directory {tts_marker_dir}: {e}")
