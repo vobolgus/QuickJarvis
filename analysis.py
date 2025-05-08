@@ -13,20 +13,20 @@ DEFAULT_LMSTUDIO_API_URL = "http://localhost:1234/v1/chat/completions"
 # Enhanced system prompt for better context handling and memory
 DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful, context-aware AI assistant that remembers previous user interactions "
-    "and your own responses. Provide concise, accurate, and informative answers. /no_think"
+    "and your own responses. Provide concise, accurate, and informative answers. For math statements spell the equations, rather than typesetting them (eq. not \\frac{1}{2}, but one over two) /no_think"
 )
 
 class GemmaAnalyzer:
     """
     Handles text analysis using LMStudio's Gemma model via API.
     """
-    
-    def __init__(self, 
-                 api_url: str = DEFAULT_LMSTUDIO_API_URL, 
+
+    def __init__(self,
+                 api_url: str = DEFAULT_LMSTUDIO_API_URL,
                  system_prompt: str = DEFAULT_SYSTEM_PROMPT):
         """
         Initialize the Gemma text analyzer.
-        
+
         Args:
             api_url: URL for the LMStudio API endpoint
             system_prompt: System prompt to guide the model's behavior
@@ -36,11 +36,11 @@ class GemmaAnalyzer:
         # Initialize conversation history with system prompt
         self.history = [{"role": "system", "content": self.system_prompt}]
         logger.info(f"Initialized Gemma analyzer with API URL: {api_url}")
-    
+
     def check_connection(self) -> bool:
         """
         Check if LMStudio is running and accessible.
-        
+
         Returns:
             True if LMStudio is available, False otherwise
         """
@@ -56,19 +56,19 @@ class GemmaAnalyzer:
         except requests.exceptions.RequestException as e:
             logger.warning(f"Failed to connect to LMStudio API: {e}")
             return False
-    
-    def analyze_text(self, 
-                     text: str, 
-                     temperature: float = 0.7, 
+
+    def analyze_text(self,
+                     text: str,
+                     temperature: float = 0.7,
                      max_tokens: int = 300) -> Optional[str]:
         """
         Send text to LMStudio's Gemma model for analysis.
-        
+
         Args:
             text: The text to analyze
             temperature: Sampling temperature (0-1)
             max_tokens: Maximum number of tokens to generate
-            
+
         Returns:
             Analysis result as text, or None if the analysis failed
         """
@@ -78,7 +78,7 @@ class GemmaAnalyzer:
             self.history.append({"role": "user", "content": text})
 
             payload = {
-                "model": "qwen3-4b",  # Adjust based on LMStudio configuration if needed
+                "model": "gemma-3-1b-it",
                 "messages": self.history,
                 "temperature": temperature,
                 "max_tokens": max_tokens
