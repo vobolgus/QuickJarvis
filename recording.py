@@ -114,8 +114,8 @@ def record_audio(record_seconds: int = DEFAULT_RECORD_SECONDS,
             return None
 
     if not suppress_prints:
-        print("🎙️ Get ready to speak in 2 seconds...")
-        time.sleep(2) # Only pause if we're about to show "Recording..."
+        print("🎙️ Get ready to speak!") # Changed message and removed sleep
+        # time.sleep(2) # REMOVED: Only pause if we're about to show "Recording..."
 
     frames: List[bytes] = []
 

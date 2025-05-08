@@ -36,6 +36,12 @@ COMMAND_RECORD_SECONDS = DEFAULT_RECORD_SECONDS # Use existing default
 WAKE_WORD_ACTIVATION_SOUND = "Yes?" # Sound/phrase spoken by TTS upon wake word detection
 # --- End Wake Word Configuration ---
 
+# --- Gemma Exit Phrases Configuration ---
+# Phrases that, if found in Gemma's response (case-insensitive), will trigger a shutdown.
+# Align these with the instructions in GemmaAnalyzer's DEFAULT_SYSTEM_PROMPT.
+GEMMA_EXIT_PHRASES = ["goodbye", "session ended", "farewell", "ending conversation", "terminating session"]
+# --- End Gemma Exit Phrases Configuration ---
+
 
 def main() -> int:
     """
@@ -148,7 +154,10 @@ def main() -> int:
 
                     if transcription_command.strip().lower() == "exit":
                         print("Exit command received. Shutting down...")
-                        tts.generate_speech("Goodbye!") # This might return a marker file
+                        # Generate a specific "Goodbye!" for direct exit command
+                        farewell_speech_file = tts.generate_speech("Goodbye!")
+                        if farewell_speech_file:
+                             response_files.append(farewell_speech_file) # Add for cleanup, though app exits soon
                         # Clean up current command audio before exiting
                         if os.path.exists(command_audio_file): os.remove(command_audio_file)
                         return 0 # Exit main function successfully
@@ -174,6 +183,17 @@ def main() -> int:
                         else:
                             logger.error("Failed to generate speech response.")
                             print("Sorry, I encountered an issue with speech synthesis.")
+
+                        # Check if Gemma's response indicates an intent to exit
+                        normalized_gemma_response = assistant_response_text.lower()
+                        for phrase in GEMMA_EXIT_PHRASES:
+                            if phrase in normalized_gemma_response:
+                                print(f"Gemma indicated session end with: '{assistant_response_text}'. Shutting down...")
+                                logger.info(f"Exiting based on Gemma's response containing exit cue: '{phrase}'")
+                                # The assistant_response_text (which contains the goodbye) has already been spoken.
+                                if os.path.exists(command_audio_file): os.remove(command_audio_file)
+                                return 0 # Exit main function successfully
+
 
                 except RuntimeError as e:
                     logger.error(f"Transcription of command failed: {e}")

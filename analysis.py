@@ -10,10 +10,12 @@ from utils import logger
 
 # Default LMStudio configuration
 DEFAULT_LMSTUDIO_API_URL = "http://localhost:1234/v1/chat/completions"
-# Enhanced system prompt for better context handling and memory
+# Enhanced system prompt for better context handling, memory, and exit cues
 DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful, context-aware AI assistant that remembers previous user interactions "
-    "and your own responses. Provide concise, accurate, and informative answers. For math statements spell the equations, rather than typesetting them (eq. not \\frac{1}{2}, but one over two) /no_think"
+    "and your own responses. Provide concise, accurate, and informative answers. For math statements spell the equations, rather than typesetting them (eq. not \\frac{1}{2}, but one over two). "
+    "If you determine from the user's query or the context that the user wishes to end the conversation, "
+    "respond with a polite closing statement that includes a phrase like 'Goodbye', 'Session ended', or 'Farewell'. /no_think"
 )
 
 class GemmaAnalyzer:
