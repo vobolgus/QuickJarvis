@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 from datetime import datetime
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List # Added List
 
 # Set up logging
 def setup_logging(logger_level: int = logging.DEBUG, console_level: int = logging.WARNING) -> logging.Logger:
@@ -29,7 +29,7 @@ def setup_logging(logger_level: int = logging.DEBUG, console_level: int = loggin
         console_handler.setLevel(console_level) # Console shows messages at this level or higher
 
         # Formatter for console messages (warnings, errors)
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(module)s - %(message)s') # Added module
         console_handler.setFormatter(formatter)
         current_logger.addHandler(console_handler)
     else:
@@ -60,22 +60,45 @@ def check_ffmpeg_installed() -> bool:
         True if ffmpeg is installed, False otherwise
     """
     try:
-        # Use subprocess.run for better control and modern Python
-        result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True, check=True)
-        logger.debug(f"ffmpeg check successful. Version info snippet: {result.stdout.splitlines()[0]}")
-        return True
-    except (subprocess.SubprocessError, FileNotFoundError) as e:
-        logger.error(f"Error checking ffmpeg: {e}")
-        # Use print for user-facing critical setup issue
-        print(
-            "ERROR: ffmpeg is not installed or not found in PATH.\n"
-            "ffmpeg is required for audio processing.\n"
-            "Please install ffmpeg:\n"
-            "- On macOS (using Homebrew): brew install ffmpeg\n"
-            "- On Ubuntu/Debian: sudo apt install ffmpeg\n"
-            "- On Windows: Download from https://www.ffmpeg.org/download.html and add to PATH"
+        # Use subprocess.run. capture_output=True handles stdout/stderr.
+        # We don't need to specify stdout=DEVNULL or stderr=DEVNULL if we capture.
+        result = subprocess.run(
+            ['ffmpeg', '-version'],
+            capture_output=True, # Capture stdout and stderr
+            text=True,
+            check=True # Raise CalledProcessError on non-zero exit
         )
+        # Log a snippet of the version info for debugging, but it won't go to console by default
+        if result.stdout:
+            logger.debug(f"ffmpeg check successful. Version info snippet: {result.stdout.splitlines()[0]}")
+        else:
+            logger.debug("ffmpeg check successful (no version info in stdout).")
+        return True
+    except FileNotFoundError: # Specific error if ffmpeg command itself is not found
+        logger.error("ffmpeg command not found. Please ensure it is installed and in your system's PATH.")
+        print_ffmpeg_install_instructions()
         return False
+    except subprocess.CalledProcessError as e: # ffmpeg found but exited with an error
+        logger.error(f"ffmpeg command failed with exit code {e.returncode}.")
+        if e.stderr:
+            logger.error(f"ffmpeg stderr: {e.stderr.strip()}")
+        print_ffmpeg_install_instructions() # Still relevant if it's misconfigured
+        return False
+    except (subprocess.SubprocessError, OSError) as e: # Other potential errors like permission issues
+        logger.error(f"Error checking ffmpeg: {e}")
+        print_ffmpeg_install_instructions()
+        return False
+
+def print_ffmpeg_install_instructions():
+    """Prints ffmpeg installation instructions to the console."""
+    print(
+        "ERROR: ffmpeg is not installed, not found in PATH, or not working correctly.\n"
+        "ffmpeg might be required by whisper.cpp for certain audio formats or processing.\n"
+        "Please install/check ffmpeg:\n"
+        "- On macOS (using Homebrew): brew install ffmpeg\n"
+        "- On Ubuntu/Debian: sudo apt install ffmpeg\n"
+        "- On Windows: Download from https://www.ffmpeg.org/download.html and add to PATH"
+    )
 
 def get_device() -> Tuple[str, str]:
     """
@@ -99,15 +122,15 @@ def get_device() -> Tuple[str, str]:
         return "cpu", "float32"
 
 
-def clean_temp_files(file_paths: list) -> None:
+def clean_temp_files(file_paths: List[Optional[str]]) -> None:
     """
     Remove temporary files if they exist.
 
     Args:
-        file_paths: List of file paths to remove
+        file_paths: List of file paths to remove (can contain None)
     """
     for file_path in file_paths:
-        if file_path is None: # Skip if a None path was added
+        if file_path is None: # Skip if a None path was added (e.g., TTS failed)
             continue
         try:
             if os.path.exists(file_path):

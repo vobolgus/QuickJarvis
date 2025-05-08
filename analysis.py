@@ -46,12 +46,21 @@ class GemmaAnalyzer:
         """
         try:
             # Simple request to check if the server is running
-            base_url = self.api_url.rsplit('/', 1)[0]
-            response = requests.get(base_url, timeout=5)
-            if response.status_code < 500:  # Any response that's not a server error
-                logger.debug("Successfully connected to LMStudio API")
+            base_url_parts = self.api_url.split('/')[:-2] # e.g. http://localhost:1234/v1/chat/completions -> http://localhost:1234
+            base_url = "/".join(base_url_parts)
+            # Try hitting a common endpoint like /v1/models if available, or just base URL
+            # For LMStudio, the base server itself might not respond to GET /
+            # Let's try /v1/models or similar. If API URL is specific, just check its base.
+            target_url_for_check = base_url + "/v1/models" # A common OpenAI compatible endpoint
+            try:
+                response = requests.get(target_url_for_check, timeout=3)
+            except requests.exceptions.ConnectionError: # If server itself is not running
+                 response = requests.get(base_url, timeout=3) # Try base URL as fallback check
+
+            if response.status_code < 400:  # 2xx or 3xx are usually okay for a health check
+                logger.debug(f"Successfully connected to LMStudio API (checked {target_url_for_check or base_url}, status: {response.status_code})")
                 return True
-            logger.warning(f"LMStudio API returned status code: {response.status_code}")
+            logger.warning(f"LMStudio API check returned status code: {response.status_code} from {target_url_for_check or base_url}")
             return False
         except requests.exceptions.RequestException as e:
             logger.warning(f"Failed to connect to LMStudio API: {e}")
@@ -78,29 +87,42 @@ class GemmaAnalyzer:
             self.history.append({"role": "user", "content": text})
 
             payload = {
-                "model": "gemma-3-1b-it",
+                "model": "gemma-3-1b-it", # Ensure this model is loaded in LMStudio
                 "messages": self.history,
                 "temperature": temperature,
-                "max_tokens": max_tokens
+                "max_tokens": max_tokens,
+                "stream": False # Ensure not streaming for this simple case
             }
             headers = {"Content-Type": "application/json"}
-            logger.debug(f"Sending request to LMStudio API: {json.dumps(payload)}")
-            response = requests.post(self.api_url, json=payload, headers=headers, timeout=30)
+            logger.debug(f"Sending request to LMStudio API: {json.dumps(payload, indent=2)}")
+            response = requests.post(self.api_url, json=payload, headers=headers, timeout=60) # Increased timeout
 
             if response.status_code == 200:
                 result = response.json()
-                analysis = result["choices"][0]["message"]["content"]
-                logger.debug("Analysis completed successfully")
-                # Store assistant response in history
-                self.history.append({"role": "assistant", "content": analysis})
-                return analysis
+                logger.debug(f"LMStudio API raw response: {json.dumps(result, indent=2)}")
+                if "choices" in result and len(result["choices"]) > 0 and "message" in result["choices"][0] and "content" in result["choices"][0]["message"]:
+                    analysis = result["choices"][0]["message"]["content"]
+                    logger.debug("Analysis completed successfully")
+                    # Store assistant response in history
+                    self.history.append({"role": "assistant", "content": analysis})
+                    return analysis
+                else:
+                    err_msg = "LMStudio API response in unexpected format."
+                    logger.error(f"{err_msg} Full response: {result}")
+                    self.history.append({"role": "assistant", "content": f"Error: {err_msg}"})
+                    return f"Error: {err_msg}"
             else:
                 err = f"Error connecting to LMStudio: {response.status_code} - {response.text}"
                 logger.error(f"Error from LMStudio API: {response.status_code} - {response.text}")
                 self.history.append({"role": "assistant", "content": err})
                 return err # Return error message to be potentially spoken or handled
+        except requests.exceptions.Timeout:
+            err = "Error analyzing with Gemma: Request timed out."
+            logger.error(err)
+            self.history.append({"role": "assistant", "content": err})
+            return err
         except Exception as e:
             err = f"Error analyzing with Gemma: {str(e)}"
-            logger.error(err)
+            logger.error(err, exc_info=True)
             self.history.append({"role": "assistant", "content": err})
             return err # Return error message

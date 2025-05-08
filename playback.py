@@ -32,7 +32,7 @@ def play_audio(file_path: str) -> bool:
             return True
 
         elif sys.platform == 'linux':  # Linux
-            subprocess.call(['aplay', file_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.call(['aplay', '-q', file_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) # -q for quiet
             return True
 
         elif sys.platform == 'win32':  # Windows
@@ -40,7 +40,9 @@ def play_audio(file_path: str) -> bool:
             # Suppressing output for 'start' is harder, os.system might show a window briefly.
             # For cleaner execution, a more specific Windows API call or library might be needed,
             # but 'start' is generally okay for simple cases.
-            os.system(f'start /B {file_path}') # /B tries to avoid new window for some commands
+            # Using 'start /B' might help for some file types, but for audio, it often still uses default player.
+            # Consider using a dedicated library like `playsound` if cleaner Windows playback is essential.
+            os.system(f'start /MIN "" "{os.path.abspath(file_path)}"') # /MIN to run minimized, "" for title
             return True
 
         else:
