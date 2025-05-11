@@ -1,17 +1,36 @@
 """
-Text-to-speech functionality using system commands for the Voice Assistant.
+Text-to-speech functionality for the Voice Assistant.
+Supports both system TTS and voice cloning capabilities.
 """
 import os
 import subprocess
 import time
-from typing import Optional, List
+from typing import Optional, List, Dict, Any, Union
 
 from utils import logger, get_timestamp
+from voice_cloning import VoiceCloner
 
-class SystemTTS:
+class EnhancedTTS:
+    """
+    Base class for TTS implementations.
+    """
+    def generate_speech(self, text: str, **kwargs) -> Optional[str]:
+        """
+        Convert text to speech.
+
+        Args:
+            text: Text to convert to speech
+
+        Returns:
+            Path to the audio file if successful, None otherwise
+        """
+        raise NotImplementedError("Subclasses must implement this method")
+
+
+class SystemTTS(EnhancedTTS):
     """
     Handles text-to-speech synthesis using system commands.
-    Utilizes direct speech synthesis without saving to file when possible.
+    Uses direct speech synthesis without saving to file when possible.
     """
 
     def __init__(self, language: str = "en", voice: Optional[str] = None):
@@ -206,3 +225,228 @@ class SystemTTS:
         except Exception as e:
             logger.error(f"Error generating speech: {str(e)}", exc_info=True)
             return None
+
+
+class VoiceCloningTTS(EnhancedTTS):
+    """
+    Handles text-to-speech synthesis using voice cloning technology.
+    """
+
+    def __init__(self, voice_name: str = None, language: str = "en"):
+        """
+        Initialize the voice cloning TTS.
+
+        Args:
+            voice_name: Name of the voice to use (must exist in the voice cloner)
+            language: Language code (e.g., "en", "es", "fr")
+        """
+        self.voice_cloner = VoiceCloner()
+        self.voice_name = voice_name
+        self.language = language
+
+        logger.debug(f"Initializing VoiceCloningTTS with voice: {voice_name}")
+
+        # Check if voice exists
+        if voice_name:
+            voices = self.voice_cloner.list_voices()
+            voice_names = [v["name"] for v in voices]
+            if voice_name not in voice_names:
+                logger.warning(f"Voice '{voice_name}' not found in available voices: {voice_names}")
+
+    def generate_speech(self, text: str, **kwargs) -> Optional[str]:
+        """
+        Convert text to speech using the voice cloning system.
+
+        Args:
+            text: Text to convert to speech
+            voice_name: Optional voice name to override the default
+            language: Optional language code to override the default
+
+        Returns:
+            Path to the generated audio file if successful, None otherwise
+        """
+        if not text.strip():
+            logger.debug("Skipping TTS for empty text")
+            return None
+
+        # Get voice name and language from kwargs or use defaults
+        voice_name = kwargs.get("voice_name", self.voice_name)
+        language = kwargs.get("language", self.language)
+
+        if not voice_name:
+            logger.error("No voice specified for voice cloning TTS")
+            return None
+
+        # Generate speech with the voice cloner
+        return self.voice_cloner.generate_speech(text, voice_name, language)
+
+    def list_available_voices(self) -> List[Dict[str, Any]]:
+        """
+        Get a list of available cloned voices.
+
+        Returns:
+            List of voice information dictionaries
+        """
+        return self.voice_cloner.list_voices()
+
+    def add_voice(self,
+                 voice_sample_path: str,
+                 voice_name: str,
+                 metadata: Optional[Dict[str, str]] = None) -> Optional[str]:
+        """
+        Add a new voice to the system.
+
+        Args:
+            voice_sample_path: Path to the voice sample audio file
+            voice_name: Name for the new voice
+            metadata: Optional metadata about the voice
+
+        Returns:
+            Path to the voice directory if successful, None otherwise
+        """
+        return self.voice_cloner.add_voice(voice_sample_path, voice_name, metadata)
+
+    def remove_voice(self, voice_name: str) -> bool:
+        """
+        Remove a voice from the system.
+
+        Args:
+            voice_name: Name of the voice to remove
+
+        Returns:
+            True if successfully removed, False otherwise
+        """
+        return self.voice_cloner.remove_voice(voice_name)
+
+
+class TTSManager:
+    """
+    Manager class to handle different TTS implementations.
+    """
+
+    def __init__(self,
+                 default_type: str = "system",
+                 default_voice: Optional[str] = None,
+                 default_language: str = "en"):
+        """
+        Initialize the TTS manager.
+
+        Args:
+            default_type: Default TTS type ("system" or "cloned")
+            default_voice: Default voice to use (depends on TTS type)
+            default_language: Default language code
+        """
+        self.default_type = default_type
+        self.default_voice = default_voice
+        self.default_language = default_language
+
+        # Initialize TTS systems
+        self.system_tts = SystemTTS(language=default_language, voice=default_voice if default_type == "system" else None)
+
+        # Only initialize voice cloning if it will be used
+        self.voice_cloning_tts = None
+        if default_type == "cloned" and default_voice:
+            self.voice_cloning_tts = VoiceCloningTTS(voice_name=default_voice, language=default_language)
+
+        logger.debug(f"Initialized TTSManager with default_type: {default_type}, default_voice: {default_voice}")
+
+    def generate_speech(self,
+                       text: str,
+                       tts_type: Optional[str] = None,
+                       voice: Optional[str] = None,
+                       language: Optional[str] = None,
+                       **kwargs) -> Optional[str]:
+        """
+        Generate speech using the specified TTS system.
+
+        Args:
+            text: Text to convert to speech
+            tts_type: TTS type to use ("system" or "cloned")
+            voice: Voice to use
+            language: Language code
+
+        Returns:
+            Path to the audio file if successful, None otherwise
+        """
+        if not text.strip():
+            logger.debug("Skipping TTS for empty text")
+            return None
+
+        # Use provided params or defaults
+        tts_type = tts_type or self.default_type
+        language = language or self.default_language
+        voice = voice or self.default_voice
+
+        if tts_type == "cloned":
+            # Initialize voice cloning TTS if needed
+            if self.voice_cloning_tts is None:
+                self.voice_cloning_tts = VoiceCloningTTS(voice_name=voice, language=language)
+            elif voice != self.voice_cloning_tts.voice_name or language != self.voice_cloning_tts.language:
+                # Update voice and language if different
+                self.voice_cloning_tts.voice_name = voice
+                self.voice_cloning_tts.language = language
+
+            return self.voice_cloning_tts.generate_speech(text, **kwargs)
+        else:  # system TTS
+            # Update voice and language if different
+            if voice != self.system_tts.voice:
+                self.system_tts.voice = voice
+            if language != self.system_tts.language:
+                self.system_tts.language = language
+
+            return self.system_tts.generate_speech(text, **kwargs)
+
+    def list_available_voices(self, tts_type: str = "cloned") -> List[Union[str, Dict[str, Any]]]:
+        """
+        List available voices for the specified TTS type.
+
+        Args:
+            tts_type: TTS type to list voices for ("system" or "cloned")
+
+        Returns:
+            List of voice names for system TTS or voice info dictionaries for cloned voices
+        """
+        if tts_type == "cloned":
+            # Initialize voice cloning TTS if needed
+            if self.voice_cloning_tts is None:
+                self.voice_cloning_tts = VoiceCloningTTS()
+            return self.voice_cloning_tts.list_available_voices()
+        else:
+            return self.system_tts.available_voices
+
+    def add_cloned_voice(self,
+                        voice_sample_path: str,
+                        voice_name: str,
+                        metadata: Optional[Dict[str, str]] = None) -> Optional[str]:
+        """
+        Add a new cloned voice to the system.
+
+        Args:
+            voice_sample_path: Path to the voice sample audio file
+            voice_name: Name for the new voice
+            metadata: Optional metadata about the voice
+
+        Returns:
+            Path to the voice directory if successful, None otherwise
+        """
+        # Initialize voice cloning TTS if needed
+        if self.voice_cloning_tts is None:
+            self.voice_cloning_tts = VoiceCloningTTS()
+
+        return self.voice_cloning_tts.add_voice(voice_sample_path, voice_name, metadata)
+
+    def remove_cloned_voice(self, voice_name: str) -> bool:
+        """
+        Remove a cloned voice from the system.
+
+        Args:
+            voice_name: Name of the voice to remove
+
+        Returns:
+            True if successfully removed, False otherwise
+        """
+        # Initialize voice cloning TTS if needed
+        if self.voice_cloning_tts is None:
+            self.voice_cloning_tts = VoiceCloningTTS()
+
+        return self.voice_cloning_tts.remove_voice(voice_name)

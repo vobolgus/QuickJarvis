@@ -71,7 +71,7 @@ class GemmaAnalyzer:
     def analyze_text(self,
                      text: str,
                      temperature: float = 0.7,
-                     max_tokens: int = 300) -> Optional[str]:
+                     max_tokens: int = 300) -> str: # Changed Optional[str] to str
         """
         Send text to LMStudio's Gemma model for analysis.
 
@@ -81,7 +81,7 @@ class GemmaAnalyzer:
             max_tokens: Maximum number of tokens to generate
 
         Returns:
-            Analysis result as text, or None if the analysis failed
+            Analysis result as text. This will be an error message string if analysis failed.
         """
         # Add user message to history and send full conversation
         try:

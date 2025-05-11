@@ -36,6 +36,10 @@ COMMAND_MAX_DURATION_SECONDS = 10 # Max duration for command recording with VAD
 WAKE_WORD_ACTIVATION_SOUND = "Yes?" # Sound/phrase spoken by TTS upon wake word detection
 # --- End Wake Word Configuration ---
 
+# --- Follow-up Configuration ---
+FOLLOW_UP_LISTEN_SECONDS = 5 # How long to listen for a follow-up after assistant speaks (VAD timeout)
+# --- End Follow-up Configuration ---
+
 # --- Gemma Exit Phrases Configuration ---
 # Phrases that, if found in Gemma's response (case-insensitive), will trigger a shutdown.
 # Align these with the instructions in GemmaAnalyzer's DEFAULT_SYSTEM_PROMPT.
@@ -51,9 +55,10 @@ def main() -> int:
     logger.debug(f"Using WHISPER_CPP_DIR: {WHISPER_CPP_DIR}")
     logger.debug(f"Using WHISPER_CLI_PATH: {WHISPER_CLI_PATH}")
     logger.debug(f"Using MODEL_PATH: {MODEL_PATH}")
-    logger.info(f"IMPORTANT: Wake word detection is SIMULATED by transcribing short audio chunks ({WAKE_WORD_RECORD_SECONDS}s).")
-    logger.info("This will be slow and CPU-intensive. A dedicated wake word engine is recommended for real-world use.")
+    logger.info(f"Wake word detection will use Voice Activity Detection (VAD) with a max duration of {WAKE_WORD_RECORD_SECONDS}s.")
+    logger.info("Transcription of detected speech for wake word is still CPU-intensive. A dedicated wake word engine is recommended for real-world use.")
     logger.info(f"Command recording will use Voice Activity Detection (VAD) with a max duration of {COMMAND_MAX_DURATION_SECONDS}s.")
+    logger.info(f"Follow-up listening will use VAD with a max duration of {FOLLOW_UP_LISTEN_SECONDS}s.")
 
 
     if "--list-devices" in sys.argv:
@@ -95,20 +100,23 @@ def main() -> int:
         )
 
         # Main application loop: Listen for wake word, then command
-        while True:
+        while True: # Outer Wake Word Loop
             print(f"\n👂 Listening for wake word '{WAKE_WORD}'...")
 
             # Record a short audio chunk for wake word detection (fixed duration)
             audio_chunk_file = record_audio(
-                record_seconds=WAKE_WORD_RECORD_SECONDS,
+                record_seconds=WAKE_WORD_RECORD_SECONDS, # Acts as VAD timeout for wake word
                 input_device_index=MICROPHONE_INDEX,
                 suppress_prints=True, # Suppress "Recording..." messages for wake word chunks
-                use_vad=False # Fixed duration for wake word
+                use_vad=True # Use VAD for wake word detection
             )
 
             if not audio_chunk_file:
-                logger.warning("Wake word recording chunk failed. Retrying in 1s.")
-                time.sleep(1) # Avoid busy-looping on persistent recording errors
+                # This means VAD timed out without detecting speech, or recording failed.
+                # No explicit log here as record_audio with VAD already prints "Listening timed out, no speech detected"
+                # or logs an error if the recording itself failed.
+                # A short sleep can prevent spamming if there's a persistent recording issue not caught by VAD.
+                # time.sleep(0.1) # Optional small delay
                 continue
 
             transcription_chunk = ""
@@ -118,7 +126,6 @@ def main() -> int:
                 logger.debug(f"Wake word check: Transcribed chunk: \"{transcription_chunk}\"")
             except RuntimeError as e:
                 logger.error(f"Transcription of wake word chunk failed: {e}")
-                # Don't stop the loop, just try again
             except Exception as e:
                 logger.error(f"Unexpected error during wake word chunk transcription: {e}", exc_info=True)
             finally:
@@ -134,95 +141,134 @@ def main() -> int:
                 if WAKE_WORD_ACTIVATION_SOUND:
                     ack_speech_file = tts.generate_speech(WAKE_WORD_ACTIVATION_SOUND)
                     if ack_speech_file:
-                        response_files.append(ack_speech_file)
+                        response_files.append(ack_speech_file) # Add TTS marker file
 
-                # For command recording, use VAD.
-                # record_seconds here acts as the max_duration/timeout for VAD.
+                # --- Start of Conversation Turn: Get Initial Command ---
+                print(f"👂 Listening for your command (VAD, max {COMMAND_MAX_DURATION_SECONDS}s)...")
                 command_audio_file = record_audio(
                     record_seconds=COMMAND_MAX_DURATION_SECONDS,
                     input_device_index=MICROPHONE_INDEX,
-                    suppress_prints=False, # Show VAD messages like "Listening for speech..."
+                    suppress_prints=False,
                     use_vad=True
                 )
 
                 if not command_audio_file:
-                    logger.error("Command audio recording failed or no speech detected.")
+                    logger.info("Initial command audio recording failed or no speech detected.")
                     # Message already printed by record_audio if VAD fails due to no speech
-                    # print("Sorry, I couldn't record your command (no speech detected or error). Listening for wake word again.")
-                    continue # Go back to wake word listening
+                    continue # Back to wake word listening
 
-                transcription_command = ""
+                current_transcribed_text = ""
                 try:
-                    logger.debug("Transcribing command with whisper.cpp...")
-                    transcription_command = transcriber.get_transcription_text(command_audio_file)
-
-                    if not transcription_command.strip():
-                        logger.info("Transcription resulted in empty text. Assuming no command was given.")
-                        print("You didn't say anything? Listening for wake word again.")
-                        if os.path.exists(command_audio_file): os.remove(command_audio_file)
-                        continue
-
-                    print(f"\nYOU: \"{transcription_command}\"")
-
-                    if transcription_command.strip().lower() == "exit":
-                        print("Exit command received. Shutting down...")
-                        # Generate a specific "Goodbye!" for direct exit command
-                        farewell_speech_file = tts.generate_speech("Goodbye!")
-                        if farewell_speech_file:
-                             response_files.append(farewell_speech_file) # Add for cleanup, though app exits soon
-                        # Clean up current command audio before exiting
-                        if os.path.exists(command_audio_file): os.remove(command_audio_file)
-                        return 0 # Exit main function successfully
-
-                    assistant_response_text: Optional[str] = None
-                    if lmstudio_available:
-                        try:
-                            logger.debug("Analyzing command with Gemma...")
-                            analysis_result = analyzer.analyze_text(transcription_command)
-                            assistant_response_text = analysis_result
-                        except Exception as e:
-                            logger.error(f"Failed to analyze command with Gemma: {str(e)}")
-                            assistant_response_text = f"I couldn't analyze that with Gemma. I heard you say: \"{transcription_command}\""
-                    else:
-                        assistant_response_text = f"Gemma analysis is not available. I heard you say: \"{transcription_command}\""
-
-                    if assistant_response_text:
-                        print(f"ASSISTANT: {assistant_response_text}")
-                        logger.debug("Generating speech response with System TTS...")
-                        temp_speech_file = tts.generate_speech(assistant_response_text)
-                        if temp_speech_file:
-                            response_files.append(temp_speech_file)
-                        else:
-                            logger.error("Failed to generate speech response.")
-                            print("Sorry, I encountered an issue with speech synthesis.")
-
-                        # Check if Gemma's response indicates an intent to exit
-                        normalized_gemma_response = assistant_response_text.lower()
-                        for phrase in GEMMA_EXIT_PHRASES:
-                            if phrase in normalized_gemma_response:
-                                print(f"Gemma indicated session end with: '{assistant_response_text}'. Shutting down...")
-                                logger.info(f"Exiting based on Gemma's response containing exit cue: '{phrase}'")
-                                # The assistant_response_text (which contains the goodbye) has already been spoken.
-                                if os.path.exists(command_audio_file): os.remove(command_audio_file)
-                                return 0 # Exit main function successfully
-
-
+                    logger.debug("Transcribing initial command with whisper.cpp...")
+                    current_transcribed_text = transcriber.get_transcription_text(command_audio_file).strip()
                 except RuntimeError as e:
-                    logger.error(f"Transcription of command failed: {e}")
+                    logger.error(f"Transcription of initial command failed: {e}")
                     print("Sorry, I couldn't transcribe your command. Please try again after the wake word.")
                 except Exception as e:
-                    logger.error(f"An unexpected error occurred during command processing: {e}", exc_info=True)
+                    logger.error(f"Unexpected error during initial command transcription: {e}", exc_info=True)
                     print("An unexpected error occurred. Listening for wake word again.")
                 finally:
                     if os.path.exists(command_audio_file):
                         try:
                             os.remove(command_audio_file)
-                            logger.debug(f"Cleaned up command audio file: {command_audio_file}")
-                        except OSError as e:
-                            logger.warning(f"Could not remove command audio file {command_audio_file}: {e}")
-            # else: # Wake word not detected, loop continues.
-                # time.sleep(0.1) # Optional small delay if wake word detection is very fast
-                                # Not strictly necessary with slow Whisper.cpp simulation
+                            logger.debug(f"Cleaned up initial command audio file: {command_audio_file}")
+                        except OSError as e_os:
+                            logger.warning(f"Could not remove initial command audio file {command_audio_file}: {e_os}")
+
+                if not current_transcribed_text:
+                    if command_audio_file: # Implies recording was successful but transcription empty
+                        logger.info("Transcription of initial command resulted in empty text.")
+                        print("You didn't say anything? Listening for wake word again.")
+                    # If command_audio_file was None, message already printed by record_audio or handled above
+                    continue # Back to wake word listening
+
+                # --- Conversation Loop (handles initial command and subsequent follow-ups) ---
+                while True:
+                    print(f"\nYOU: \"{current_transcribed_text}\"")
+
+                    if current_transcribed_text.strip().lower() == "exit":
+                        print("Exit command received. Shutting down...")
+                        farewell_speech_file = tts.generate_speech("Goodbye!")
+                        if farewell_speech_file:
+                             response_files.append(farewell_speech_file) # Add TTS marker file
+                        return 0 # Exit main function successfully
+
+                    assistant_response_text: str
+                    if lmstudio_available:
+                        logger.debug("Analyzing command with Gemma...")
+                        assistant_response_text = analyzer.analyze_text(current_transcribed_text)
+                    else:
+                        assistant_response_text = f"Gemma analysis is not available. I heard you say: \"{current_transcribed_text}\""
+
+                    if assistant_response_text is None: # Defensive check, analyze_text should always return str
+                        logger.error("GemmaAnalyzer.analyze_text unexpectedly returned None. This should not happen.")
+                        assistant_response_text = "I encountered an internal error trying to understand that."
+
+
+                    print(f"ASSISTANT: {assistant_response_text}")
+                    logger.debug("Generating speech response with System TTS...")
+                    temp_speech_file = tts.generate_speech(assistant_response_text)
+                    if temp_speech_file:
+                        response_files.append(temp_speech_file) # Add TTS marker file
+                    else:
+                        logger.error("Failed to generate speech response.")
+                        # Assistant_response_text was already printed to console.
+
+                    # Check if Gemma's response indicates an intent to exit
+                    normalized_gemma_response = assistant_response_text.lower()
+                    for phrase in GEMMA_EXIT_PHRASES:
+                        if phrase in normalized_gemma_response:
+                            print(f"Gemma indicated session end with: '{assistant_response_text}'. Shutting down...")
+                            logger.info(f"Exiting based on Gemma's response containing exit cue: '{phrase}'")
+                            return 0 # Exit main function successfully
+
+                    # --- Follow-up Listening ---
+                    print(f"\n👂 Listening for follow-up (VAD, max {FOLLOW_UP_LISTEN_SECONDS}s)...")
+                    follow_up_audio_file = record_audio(
+                        record_seconds=FOLLOW_UP_LISTEN_SECONDS,
+                        input_device_index=MICROPHONE_INDEX,
+                        suppress_prints=True, # Quieter for follow-up
+                        use_vad=True
+                    )
+
+                    if not follow_up_audio_file:
+                        logger.info("No follow-up speech detected or recording failed.")
+                        print("...No follow-up. Returning to wake word listening.")
+                        break # Exit conversation loop, go back to outer wake word loop
+
+                    follow_up_transcription = ""
+                    try:
+                        logger.debug("Transcribing follow-up command...")
+                        follow_up_transcription = transcriber.get_transcription_text(follow_up_audio_file).strip()
+                    except RuntimeError as e:
+                        logger.error(f"Transcription of follow-up failed: {e}")
+                        print("Sorry, I couldn't transcribe your follow-up. Returning to wake word listening.")
+                        break # Exit conversation loop
+                    except Exception as e:
+                        logger.error(f"Unexpected error during follow-up transcription: {e}", exc_info=True)
+                        print("An unexpected error occurred with the follow-up. Returning to wake word listening.")
+                        break # Exit conversation loop
+                    finally:
+                        if os.path.exists(follow_up_audio_file):
+                            try:
+                                os.remove(follow_up_audio_file)
+                                logger.debug(f"Cleaned up follow-up audio file: {follow_up_audio_file}")
+                            except OSError as e_os:
+                                logger.warning(f"Could not remove follow-up audio file {follow_up_audio_file}: {e_os}")
+
+                    if not follow_up_transcription:
+                        logger.info("Follow-up transcription is empty.")
+                        print("...No clear follow-up. Returning to wake word listening.")
+                        break # Exit conversation loop
+
+                    # If we have a valid follow-up transcription, update current_transcribed_text
+                    # and the conversation loop will continue with this new text.
+                    current_transcribed_text = follow_up_transcription
+                # --- End of Conversation Loop ---
+                # If 'break' is hit in the conversation loop, execution comes here,
+                # then the outer wake word loop ('while True') continues.
+            # else: Wake word not detected, main loop continues
+                # time.sleep(0.1) # Optional small delay
 
     except KeyboardInterrupt:
         print("\nExiting program via KeyboardInterrupt...")
@@ -234,7 +280,7 @@ def main() -> int:
         return 1
     finally:
         logger.debug("Cleaning up temporary files...")
-        clean_temp_files(response_files)
+        clean_temp_files(response_files) # Cleans TTS marker files
         temp_dir = "temp_recordings"
         if os.path.exists(temp_dir):
             for item in os.listdir(temp_dir):
