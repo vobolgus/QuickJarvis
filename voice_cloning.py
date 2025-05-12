@@ -534,7 +534,7 @@ class VoiceCloner:
                         output_path: Optional[str] = None) -> Optional[str]:
         """
         Generate speech using a cloned voice.
-        Now with enhanced error handling and guaranteed fallback to system TTS.
+        Now with enhanced error handling and fallback to system TTS if needed.
 
         Args:
             text: Text to convert to speech
@@ -569,8 +569,50 @@ class VoiceCloner:
             os.makedirs(output_dir, exist_ok=True)
             output_path = os.path.join(output_dir, f"response_{voice_name}_{timestamp}.wav")
 
-        # Skip TTS library and use direct fallback
-        logger.info(f"Using system voice for '{voice_name}' due to known TTS library issues")
+        # MODIFIED SECTION: Actually try to use voice cloning instead of immediately falling back
+        try:
+            # Try to load the model if it's not loaded
+            if not self.loaded:
+                model_loaded = self.load_model()
+                logger.info(f"TTS model load attempt result: {model_loaded}")
+
+            # If we have TTS loaded, try to use it with the cloned voice
+            if self.loaded and self.tts is not None:
+                logger.info(f"Attempting to generate speech with cloned voice: {voice_name}")
+
+                # Get the voice sample path from voice_info
+                speaker_wav = voice_info["sample_path"]
+
+                # Make sure the sample exists
+                if not os.path.exists(speaker_wav):
+                    logger.error(f"Voice sample file not found: {speaker_wav}")
+                    return self._generate_with_fallback(text, output_path)
+
+                try:
+                    # Generate speech with the TTS model
+                    logger.debug(f"Generating speech with TTS model using voice sample: {speaker_wav}")
+                    self.tts.tts_to_file(
+                        text=text,
+                        file_path=output_path,
+                        speaker_wav=speaker_wav,
+                        language=language
+                    )
+
+                    # Check if output file was created successfully
+                    if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+                        logger.info(f"Successfully generated speech with cloned voice to: {output_path}")
+                        return output_path
+                    else:
+                        logger.warning("TTS output file was not created properly")
+                except Exception as tts_e:
+                    logger.error(f"Error using TTS with cloned voice: {tts_e}")
+            else:
+                logger.warning("TTS model is not loaded or not available")
+        except Exception as e:
+            logger.error(f"Error while attempting to use cloned voice: {e}")
+
+        # If we got here, cloned voice attempt failed - use fallback
+        logger.warning(f"Falling back to system voice after cloned voice attempt failed")
         return self._generate_with_fallback(text, output_path)
 
     def _generate_with_fallback(self, text: str, output_path: str) -> Optional[str]:

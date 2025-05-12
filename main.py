@@ -39,7 +39,7 @@ WAKE_WORD_ACTIVATION_SOUND = "Yes?" # Sound/phrase spoken by TTS upon wake word 
 # --- End Wake Word Configuration ---
 
 # --- Follow-up Configuration ---
-FOLLOW_UP_LISTEN_SECONDS = 5 # How long to listen for a follow-up after assistant speaks (VAD timeout)
+FOLLOW_UP_LISTEN_SECONDS = 10 # How long to listen for a follow-up after assistant speaks (VAD timeout)
 # --- End Follow-up Configuration ---
 
 # --- Gemma Exit Phrases Configuration ---
@@ -407,7 +407,7 @@ def main():
                             play_response(temp_speech_file)
                     elif "clone my voice" in current_transcribed_text.lower() or "add my voice" in current_transcribed_text.lower():
                         print("Starting voice cloning process...")
-                        assistant_response_text = "I'll clone your voice. Please speak for 10 seconds after the beep."
+                        assistant_response_text = "I'll clone your voice. Please speak for 20 seconds after the beep."
                         print(f"ASSISTANT: {assistant_response_text}")
                         temp_speech_file = tts_manager.generate_speech(assistant_response_text)
                         if temp_speech_file:
@@ -417,9 +417,9 @@ def main():
 
                         # Record a longer sample for voice cloning
                         time.sleep(1)  # Short pause before recording
-                        print("🔴 Recording voice sample (10 seconds)... Speak naturally.")
+                        print("🔴 Recording voice sample (20 seconds)... Speak naturally.")
                         voice_sample_file = record_audio(
-                            record_seconds=10,
+                            record_seconds=20,
                             input_device_index=MICROPHONE_INDEX,
                             suppress_prints=False,
                             use_vad=False  # We want a fixed duration for the sample
