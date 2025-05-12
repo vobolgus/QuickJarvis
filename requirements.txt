@@ -6,6 +6,12 @@ numpy>=1.20.0
 # Audio processing
 pyaudio>=0.2.13
 webrtcvad-wheels>=2.0.10.post2
+pydub>=0.25.1
 
 # HTTP and API
 requests>=2.28.0
+
+# Voice cloning dependencies
+TTS>=0.21.0  # Coqui TTS
+librosa>=0.10.0  # Audio processing
+ffmpeg-python>=0.2.0  # FFmpeg Python bindings

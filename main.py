@@ -1,20 +1,21 @@
 """
 Voice Assistant main application that integrates speech recognition,
-text analysis, and speech synthesis components.
-Includes a simulated wake word detection.
+text analysis, and speech synthesis components with voice cloning support.
+Includes wake word detection and conversation support.
 """
 import os
 import sys
 import traceback
 import time
-from typing import List, Optional
+import argparse
+from typing import List, Optional, Dict, Any
 
 # Import modules
-from utils import logger, clean_temp_files, check_ffmpeg_installed
+from utils import logger, clean_temp_files, check_ffmpeg_installed, get_timestamp
 from recording import record_audio, DEFAULT_RECORD_SECONDS, list_audio_devices
 from transcription_cpp import WhisperCppTranscriber
 from analysis import GemmaAnalyzer
-from tts import SystemTTS
+from tts import TTSManager, SystemTTS, VoiceCloningTTS
 
 # --- Configuration for whisper.cpp ---
 DEFAULT_WHISPER_CPP_DIR = os.path.expanduser("~/dev/whisper.cpp")
@@ -46,12 +47,182 @@ FOLLOW_UP_LISTEN_SECONDS = 5 # How long to listen for a follow-up after assistan
 GEMMA_EXIT_PHRASES = ["goodbye", "session ended", "farewell", "ending conversation", "terminating session"]
 # --- End Gemma Exit Phrases Configuration ---
 
+# --- Voice Cloning Configuration ---
+DEFAULT_TTS_TYPE = "system"  # "system" or "cloned"
+DEFAULT_VOICE = None  # Default system voice or cloned voice name
+DEFAULT_LANGUAGE = "en"  # Default language
+# --- End Voice Cloning Configuration ---
 
-def main() -> int:
+
+def parse_arguments():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="Voice Assistant with Voice Cloning")
+
+    # General options
+    parser.add_argument("--list-devices", action="store_true", help="List available audio devices and exit")
+    parser.add_argument("--mic-index", type=int, help="Microphone device index to use")
+
+    # Wake word options
+    parser.add_argument("--wake-word", type=str, default=WAKE_WORD, help="Wake word to activate the assistant")
+    parser.add_argument("--wake-activation", type=str, default=WAKE_WORD_ACTIVATION_SOUND,
+                        help="Sound or phrase spoken upon wake word detection")
+
+    # TTS options
+    tts_group = parser.add_argument_group("Text-to-Speech Options")
+    tts_group.add_argument("--tts-type", choices=["system", "cloned"], default=DEFAULT_TTS_TYPE,
+                         help="Type of TTS to use (system or cloned)")
+    tts_group.add_argument("--voice", type=str, help="Voice to use (system voice name or cloned voice name)")
+    tts_group.add_argument("--language", type=str, default=DEFAULT_LANGUAGE,
+                         help="Language code for TTS (e.g., 'en', 'fr', 'es')")
+
+    # Voice cloning options
+    vc_group = parser.add_argument_group("Voice Cloning Options")
+    vc_group.add_argument("--list-cloned-voices", action="store_true",
+                        help="List available cloned voices and exit")
+    vc_group.add_argument("--add-voice", action="store_true",
+                        help="Add a new cloned voice")
+    vc_group.add_argument("--voice-sample", type=str,
+                        help="Path to voice sample file for adding a new voice")
+    vc_group.add_argument("--voice-name", type=str,
+                        help="Name for the new voice when adding")
+    vc_group.add_argument("--remove-voice", type=str,
+                        help="Name of cloned voice to remove")
+
+    return parser.parse_args()
+
+
+def add_new_voice(tts_manager, voice_sample, voice_name):
     """
-    Main function that runs the Voice Assistant application with wake word detection.
+    Add a new cloned voice to the system.
+
+    Args:
+        tts_manager: TTSManager instance
+        voice_sample: Path to voice sample file
+        voice_name: Name for the new voice
+
+    Returns:
+        True if voice was added successfully, False otherwise
     """
+    print(f"\n🎤 Adding new voice '{voice_name}' from sample: {voice_sample}")
+
+    if not os.path.exists(voice_sample):
+        print(f"❌ Voice sample file not found: {voice_sample}")
+        return False
+
+    # Add basic metadata
+    metadata = {
+        "Created": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "Source": os.path.basename(voice_sample)
+    }
+
+    # Add the voice
+    result = tts_manager.add_cloned_voice(voice_sample, voice_name, metadata)
+
+    if result:
+        print(f"✅ Voice '{voice_name}' added successfully!")
+        return True
+    else:
+        print(f"❌ Failed to add voice '{voice_name}'")
+        return False
+
+
+def list_cloned_voices(tts_manager):
+    """
+    List available cloned voices.
+
+    Args:
+        tts_manager: TTSManager instance
+    """
+    voices = tts_manager.list_available_voices(tts_type="cloned")
+
+    print("\n🎤 Available Cloned Voices:")
+    if not voices:
+        print("  No cloned voices available")
+        return
+
+    for voice in voices:
+        name = voice["name"]
+        has_sample = "✓" if voice.get("has_sample", False) else "✗"
+        has_embedding = "✓" if voice.get("has_embedding", False) else "✗"
+        metadata = voice.get("metadata", {})
+
+        print(f"  • {name}")
+        print(f"    - Sample: {has_sample}")
+        print(f"    - Embedding: {has_embedding}")
+
+        if metadata:
+            print("    - Metadata:")
+            for key, value in metadata.items():
+                print(f"      • {key}: {value}")
+        print()
+
+
+def remove_cloned_voice(tts_manager, voice_name):
+    """
+    Remove a cloned voice from the system.
+
+    Args:
+        tts_manager: TTSManager instance
+        voice_name: Name of the voice to remove
+
+    Returns:
+        True if voice was removed successfully, False otherwise
+    """
+    print(f"\n🗑️ Removing cloned voice: {voice_name}")
+
+    result = tts_manager.remove_cloned_voice(voice_name)
+
+    if result:
+        print(f"✅ Voice '{voice_name}' removed successfully!")
+        return True
+    else:
+        print(f"❌ Failed to remove voice '{voice_name}'")
+        return False
+
+
+def main():
+    """
+    Main function that runs the Voice Assistant application with wake word detection
+    and voice cloning support.
+    """
+    args = parse_arguments()
+
+    # Update global variables from args
+    global WAKE_WORD, WAKE_WORD_ACTIVATION_SOUND, MICROPHONE_INDEX
+    WAKE_WORD = args.wake_word
+    WAKE_WORD_ACTIVATION_SOUND = args.wake_activation
+    MICROPHONE_INDEX = args.mic_index
+
+    # Initialize TTS manager with CLI args
+    tts_manager = TTSManager(
+        default_type=args.tts_type,
+        default_voice=args.voice,
+        default_language=args.language
+    )
+
+    # Handle special commands
+    if args.list_devices:
+        list_audio_devices()
+        return 0
+
+    if args.list_cloned_voices:
+        list_cloned_voices(tts_manager)
+        return 0
+
+    if args.add_voice:
+        if not args.voice_sample or not args.voice_name:
+            print("❌ Error: --voice-sample and --voice-name are required when using --add-voice")
+            return 1
+        success = add_new_voice(tts_manager, args.voice_sample, args.voice_name)
+        return 0 if success else 1
+
+    if args.remove_voice:
+        success = remove_cloned_voice(tts_manager, args.remove_voice)
+        return 0 if success else 1
+
     print(f"\n🎤 Voice Assistant Activated. Wake word: '{WAKE_WORD.upper()}' 🎤")
+    if args.tts_type == "cloned" and args.voice:
+        print(f"📢 Using cloned voice: '{args.voice}'")
     logger.debug(f"Using WHISPER_CPP_DIR: {WHISPER_CPP_DIR}")
     logger.debug(f"Using WHISPER_CLI_PATH: {WHISPER_CLI_PATH}")
     logger.debug(f"Using MODEL_PATH: {MODEL_PATH}")
@@ -60,15 +231,10 @@ def main() -> int:
     logger.info(f"Command recording will use Voice Activity Detection (VAD) with a max duration of {COMMAND_MAX_DURATION_SECONDS}s.")
     logger.info(f"Follow-up listening will use VAD with a max duration of {FOLLOW_UP_LISTEN_SECONDS}s.")
 
-
-    if "--list-devices" in sys.argv:
-        list_audio_devices()
-        return 0
-
     if not check_ffmpeg_installed():
         return 1
 
-    response_files: List[str] = []  # Keep track of response files for cleanup
+    response_files = []  # Keep track of response files for cleanup
 
     try:
         logger.debug("Initializing whisper.cpp transcriber...")
@@ -95,15 +261,11 @@ def main() -> int:
             print("Gemma analysis will be unavailable. Ensure LMStudio is running with a model loaded.")
             # No longer asking to quit, will proceed without Gemma if unavailable
 
-        tts = SystemTTS(
-            language="ru" if analyzer.system_prompt and "русский" in analyzer.system_prompt.lower() else "en"
-        )
-
         # Main application loop: Listen for wake word, then command
-        while True: # Outer Wake Word Loop
+        while True:
             print(f"\n👂 Listening for wake word '{WAKE_WORD}'...")
 
-            # Record a short audio chunk for wake word detection (fixed duration)
+            # Record a short audio chunk for wake word detection (with VAD)
             audio_chunk_file = record_audio(
                 record_seconds=WAKE_WORD_RECORD_SECONDS, # Acts as VAD timeout for wake word
                 input_device_index=MICROPHONE_INDEX,
@@ -112,11 +274,7 @@ def main() -> int:
             )
 
             if not audio_chunk_file:
-                # This means VAD timed out without detecting speech, or recording failed.
-                # No explicit log here as record_audio with VAD already prints "Listening timed out, no speech detected"
-                # or logs an error if the recording itself failed.
-                # A short sleep can prevent spamming if there's a persistent recording issue not caught by VAD.
-                # time.sleep(0.1) # Optional small delay
+                # This means VAD timed out without detecting speech, or recording failed
                 continue
 
             transcription_chunk = ""
@@ -124,10 +282,8 @@ def main() -> int:
                 # Transcribe the chunk
                 transcription_chunk = transcriber.get_transcription_text(audio_chunk_file).lower()
                 logger.debug(f"Wake word check: Transcribed chunk: \"{transcription_chunk}\"")
-            except RuntimeError as e:
-                logger.error(f"Transcription of wake word chunk failed: {e}")
             except Exception as e:
-                logger.error(f"Unexpected error during wake word chunk transcription: {e}", exc_info=True)
+                logger.error(f"Error during wake word chunk transcription: {e}")
             finally:
                 if os.path.exists(audio_chunk_file):
                     try:
@@ -139,7 +295,7 @@ def main() -> int:
             if WAKE_WORD.lower() in transcription_chunk:
                 print(f"✨ Wake word '{WAKE_WORD.upper()}' detected!")
                 if WAKE_WORD_ACTIVATION_SOUND:
-                    ack_speech_file = tts.generate_speech(WAKE_WORD_ACTIVATION_SOUND)
+                    ack_speech_file = tts_manager.generate_speech(WAKE_WORD_ACTIVATION_SOUND)
                     if ack_speech_file:
                         response_files.append(ack_speech_file) # Add TTS marker file
 
@@ -154,19 +310,15 @@ def main() -> int:
 
                 if not command_audio_file:
                     logger.info("Initial command audio recording failed or no speech detected.")
-                    # Message already printed by record_audio if VAD fails due to no speech
                     continue # Back to wake word listening
 
                 current_transcribed_text = ""
                 try:
                     logger.debug("Transcribing initial command with whisper.cpp...")
                     current_transcribed_text = transcriber.get_transcription_text(command_audio_file).strip()
-                except RuntimeError as e:
-                    logger.error(f"Transcription of initial command failed: {e}")
-                    print("Sorry, I couldn't transcribe your command. Please try again after the wake word.")
                 except Exception as e:
-                    logger.error(f"Unexpected error during initial command transcription: {e}", exc_info=True)
-                    print("An unexpected error occurred. Listening for wake word again.")
+                    logger.error(f"Error during initial command transcription: {e}")
+                    print("Sorry, I couldn't transcribe your command. Please try again after the wake word.")
                 finally:
                     if os.path.exists(command_audio_file):
                         try:
@@ -176,51 +328,139 @@ def main() -> int:
                             logger.warning(f"Could not remove initial command audio file {command_audio_file}: {e_os}")
 
                 if not current_transcribed_text:
-                    if command_audio_file: # Implies recording was successful but transcription empty
-                        logger.info("Transcription of initial command resulted in empty text.")
-                        print("You didn't say anything? Listening for wake word again.")
-                    # If command_audio_file was None, message already printed by record_audio or handled above
+                    logger.info("Transcription resulted in empty text.")
+                    print("I didn't catch that. Let's try again.")
                     continue # Back to wake word listening
 
                 # --- Conversation Loop (handles initial command and subsequent follow-ups) ---
-                while True:
+                while True: # Inner conversation loop
                     print(f"\nYOU: \"{current_transcribed_text}\"")
 
+                    # Check for exit command
                     if current_transcribed_text.strip().lower() == "exit":
                         print("Exit command received. Shutting down...")
-                        farewell_speech_file = tts.generate_speech("Goodbye!")
+                        farewell_speech_file = tts_manager.generate_speech("Goodbye!")
                         if farewell_speech_file:
-                             response_files.append(farewell_speech_file) # Add TTS marker file
+                             response_files.append(farewell_speech_file)
                         return 0 # Exit main function successfully
 
-                    assistant_response_text: str
-                    if lmstudio_available:
-                        logger.debug("Analyzing command with Gemma...")
-                        assistant_response_text = analyzer.analyze_text(current_transcribed_text)
+                    # Check for voice cloning commands in the transcription
+                    if "use system voice" in current_transcribed_text.lower():
+                        print("Switching to system TTS...")
+                        tts_manager.default_type = "system"
+                        assistant_response_text = "I've switched to using the system voice."
+                        print(f"ASSISTANT: {assistant_response_text}")
+                        temp_speech_file = tts_manager.generate_speech(assistant_response_text)
+                        if temp_speech_file:
+                            response_files.append(temp_speech_file)
+                    elif "use cloned voice" in current_transcribed_text.lower():
+                        # Extract voice name from command
+                        parts = current_transcribed_text.lower().split("use cloned voice")
+                        if len(parts) > 1 and parts[1].strip():
+                            voice_name = parts[1].strip()
+                            # Check if voice exists
+                            voices = tts_manager.list_available_voices(tts_type="cloned")
+                            voice_names = [v["name"] for v in voices]
+
+                            if voice_name in voice_names:
+                                print(f"Switching to cloned voice: '{voice_name}'")
+                                tts_manager.default_type = "cloned"
+                                tts_manager.default_voice = voice_name
+                                assistant_response_text = f"I've switched to using the cloned voice named {voice_name}."
+                            else:
+                                assistant_response_text = f"I couldn't find a cloned voice named {voice_name}. Available voices are: {', '.join(voice_names) if voice_names else 'None'}"
+                        else:
+                            voices = tts_manager.list_available_voices(tts_type="cloned")
+                            voice_names = [v["name"] for v in voices]
+                            if voice_names:
+                                assistant_response_text = f"Please specify which cloned voice to use. Available voices are: {', '.join(voice_names)}"
+                            else:
+                                assistant_response_text = "There are no cloned voices available. Please add a voice first."
+
+                        print(f"ASSISTANT: {assistant_response_text}")
+                        temp_speech_file = tts_manager.generate_speech(assistant_response_text)
+                        if temp_speech_file:
+                            response_files.append(temp_speech_file)
+                    elif "clone my voice" in current_transcribed_text.lower() or "add my voice" in current_transcribed_text.lower():
+                        print("Starting voice cloning process...")
+                        assistant_response_text = "I'll clone your voice. Please speak for 10 seconds after the beep."
+                        print(f"ASSISTANT: {assistant_response_text}")
+                        temp_speech_file = tts_manager.generate_speech(assistant_response_text)
+                        if temp_speech_file:
+                            response_files.append(temp_speech_file)
+
+                        # Record a longer sample for voice cloning
+                        time.sleep(1)  # Short pause before recording
+                        print("🔴 Recording voice sample (10 seconds)... Speak naturally.")
+                        voice_sample_file = record_audio(
+                            record_seconds=10,
+                            input_device_index=MICROPHONE_INDEX,
+                            suppress_prints=False,
+                            use_vad=False  # We want a fixed duration for the sample
+                        )
+
+                        if not voice_sample_file:
+                            print("❌ Failed to record voice sample.")
+                            assistant_response_text = "I couldn't record your voice sample. Please try again."
+                        else:
+                            # Extract a name for the voice
+                            print("Processing voice sample...")
+                            voice_name = f"user_voice_{get_timestamp()}"
+
+                            # Add the voice
+                            result = tts_manager.add_cloned_voice(voice_sample_file, voice_name, {"Source": "User recording"})
+
+                            if result:
+                                tts_manager.default_type = "cloned"
+                                tts_manager.default_voice = voice_name
+                                assistant_response_text = f"I've successfully cloned your voice! I'll use it from now on."
+                            else:
+                                assistant_response_text = "I had trouble processing your voice sample. Please try again."
+
+                        print(f"ASSISTANT: {assistant_response_text}")
+                        temp_speech_file = tts_manager.generate_speech(assistant_response_text)
+                        if temp_speech_file:
+                            response_files.append(temp_speech_file)
+                    elif "list voices" in current_transcribed_text.lower():
+                        voices = tts_manager.list_available_voices(tts_type="cloned")
+                        voice_names = [v["name"] for v in voices]
+
+                        if voice_names:
+                            assistant_response_text = f"Available cloned voices are: {', '.join(voice_names)}"
+                        else:
+                            assistant_response_text = "There are no cloned voices available. Please add a voice first."
+
+                        print(f"ASSISTANT: {assistant_response_text}")
+                        temp_speech_file = tts_manager.generate_speech(assistant_response_text)
+                        if temp_speech_file:
+                            response_files.append(temp_speech_file)
                     else:
-                        assistant_response_text = f"Gemma analysis is not available. I heard you say: \"{current_transcribed_text}\""
+                        # Process normal command with Gemma
+                        if lmstudio_available:
+                            logger.debug("Analyzing command with Gemma...")
+                            assistant_response_text = analyzer.analyze_text(current_transcribed_text)
+                        else:
+                            assistant_response_text = f"Gemma analysis is not available. I heard you say: \"{current_transcribed_text}\""
 
-                    if assistant_response_text is None: # Defensive check, analyze_text should always return str
-                        logger.error("GemmaAnalyzer.analyze_text unexpectedly returned None. This should not happen.")
-                        assistant_response_text = "I encountered an internal error trying to understand that."
+                        if assistant_response_text is None:
+                            logger.error("GemmaAnalyzer.analyze_text unexpectedly returned None.")
+                            assistant_response_text = "I encountered an internal error trying to understand that."
 
+                        print(f"ASSISTANT: {assistant_response_text}")
+                        logger.debug("Generating speech response with TTS Manager...")
+                        temp_speech_file = tts_manager.generate_speech(assistant_response_text)
+                        if temp_speech_file:
+                            response_files.append(temp_speech_file)
+                        else:
+                            logger.error("Failed to generate speech response.")
 
-                    print(f"ASSISTANT: {assistant_response_text}")
-                    logger.debug("Generating speech response with System TTS...")
-                    temp_speech_file = tts.generate_speech(assistant_response_text)
-                    if temp_speech_file:
-                        response_files.append(temp_speech_file) # Add TTS marker file
-                    else:
-                        logger.error("Failed to generate speech response.")
-                        # Assistant_response_text was already printed to console.
-
-                    # Check if Gemma's response indicates an intent to exit
-                    normalized_gemma_response = assistant_response_text.lower()
-                    for phrase in GEMMA_EXIT_PHRASES:
-                        if phrase in normalized_gemma_response:
-                            print(f"Gemma indicated session end with: '{assistant_response_text}'. Shutting down...")
-                            logger.info(f"Exiting based on Gemma's response containing exit cue: '{phrase}'")
-                            return 0 # Exit main function successfully
+                        # Check if Gemma's response indicates an intent to exit
+                        normalized_gemma_response = assistant_response_text.lower()
+                        for phrase in GEMMA_EXIT_PHRASES:
+                            if phrase in normalized_gemma_response:
+                                print(f"Gemma indicated session end with: '{assistant_response_text}'. Shutting down...")
+                                logger.info(f"Exiting based on Gemma's response containing exit cue: '{phrase}'")
+                                return 0 # Exit main function successfully
 
                     # --- Follow-up Listening ---
                     print(f"\n👂 Listening for follow-up (VAD, max {FOLLOW_UP_LISTEN_SECONDS}s)...")
@@ -240,13 +480,9 @@ def main() -> int:
                     try:
                         logger.debug("Transcribing follow-up command...")
                         follow_up_transcription = transcriber.get_transcription_text(follow_up_audio_file).strip()
-                    except RuntimeError as e:
-                        logger.error(f"Transcription of follow-up failed: {e}")
-                        print("Sorry, I couldn't transcribe your follow-up. Returning to wake word listening.")
-                        break # Exit conversation loop
                     except Exception as e:
-                        logger.error(f"Unexpected error during follow-up transcription: {e}", exc_info=True)
-                        print("An unexpected error occurred with the follow-up. Returning to wake word listening.")
+                        logger.error(f"Error during follow-up transcription: {e}")
+                        print("Sorry, I couldn't transcribe your follow-up. Returning to wake word listening.")
                         break # Exit conversation loop
                     finally:
                         if os.path.exists(follow_up_audio_file):
@@ -265,10 +501,6 @@ def main() -> int:
                     # and the conversation loop will continue with this new text.
                     current_transcribed_text = follow_up_transcription
                 # --- End of Conversation Loop ---
-                # If 'break' is hit in the conversation loop, execution comes here,
-                # then the outer wake word loop ('while True') continues.
-            # else: Wake word not detected, main loop continues
-                # time.sleep(0.1) # Optional small delay
 
     except KeyboardInterrupt:
         print("\nExiting program via KeyboardInterrupt...")
@@ -280,7 +512,7 @@ def main() -> int:
         return 1
     finally:
         logger.debug("Cleaning up temporary files...")
-        clean_temp_files(response_files) # Cleans TTS marker files
+        clean_temp_files(response_files)
         temp_dir = "temp_recordings"
         if os.path.exists(temp_dir):
             for item in os.listdir(temp_dir):

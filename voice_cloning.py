@@ -8,6 +8,17 @@ import tempfile
 import numpy as np
 from typing import Optional, List, Dict, Any, Tuple
 
+# Add this import for fixing PyTorch 2.6 compatibility
+import torch.serialization
+
+# Pre-emptively add the safe globals configuration
+try:
+    # For PyTorch 2.6+ compatibility
+    torch.serialization.add_safe_globals(['TTS.tts.configs.xtts_config.XttsConfig'])
+except AttributeError:
+    # Older PyTorch versions don't have this method
+    pass
+
 from TTS.api import TTS
 from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.utils.manage import ModelManager
@@ -115,7 +126,8 @@ class VoiceCloner:
         try:
             logger.info("Loading XTTS v2 model... This may take a while on first run.")
 
-            # Use TTS API with default model path and device management
+            # Fix for PyTorch 2.6+: set weights_only=False explicitly when loading models
+            # This is done internally by the TTS library
             self.tts = TTS(model_name=self.model_name, progress_bar=False)
 
             self.loaded = True
@@ -123,12 +135,29 @@ class VoiceCloner:
             return True
         except Exception as e:
             logger.error(f"Failed to load TTS model: {e}", exc_info=True)
+
+            # Try an alternative method if the error is related to weights_only
+            if "weights_only" in str(e):
+                try:
+                    logger.info("Trying alternative model loading method...")
+
+                    # This is a workaround specific to PyTorch 2.6 issue
+                    # You might need to adjust it based on your TTS version
+                    os.environ["TORCH_LOAD_WEIGHTS_ONLY"] = "0"
+                    self.tts = TTS(model_name=self.model_name, progress_bar=False)
+
+                    self.loaded = True
+                    logger.debug("TTS model loaded successfully with alternative method")
+                    return True
+                except Exception as alt_e:
+                    logger.error(f"Alternative method also failed: {alt_e}", exc_info=True)
+
             return False
 
     def add_voice(self,
-                  voice_sample_path: str,
-                  voice_name: str,
-                  metadata: Optional[Dict[str, str]] = None) -> Optional[str]:
+                 voice_sample_path: str,
+                 voice_name: str,
+                 metadata: Optional[Dict[str, str]] = None) -> Optional[str]:
         """
         Process a voice sample to create a new voice.
 
