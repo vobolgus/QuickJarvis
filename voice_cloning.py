@@ -3,6 +3,7 @@ Voice cloning functionality for the Voice Assistant.
 Provides voice cloning capabilities with robust fallback to system voice.
 """
 import os
+import io
 import shutil
 import tempfile
 import numpy as np
@@ -21,6 +22,9 @@ try:
 except ImportError:
     print("Warning: pydub not available for audio processing")
     HAVE_PYDUB = False
+
+os.environ["TTS_PROGRESS_BAR"] = "false"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
 # Flag for whether we should try to use the TTS library or skip it completely
 # Setting this to False will immediately use system voice instead of trying voice cloning
@@ -392,11 +396,21 @@ class VoiceCloner:
         try:
             methods_tried += 1
             logger.info(f"Loading XTTS v2 model (attempt {methods_tried}/{max_attempts})...")
+            original_stdout = sys.stdout
+            sys.stdout = io.StringIO()
+
+            # Load the model
             self.tts = TTS(model_name=self.model_name, progress_bar=False)
+
+            # Restore stdout
+            sys.stdout = original_stdout
+
             self.loaded = True
             logger.debug("TTS model loaded successfully with standard approach")
             return True
         except Exception as e:
+            # Restore stdout in case of exception
+            sys.stdout = original_stdout
             self.last_error_message = str(e)
             logger.warning(f"Standard loading method failed: {e}")
 
@@ -591,6 +605,10 @@ class VoiceCloner:
                 try:
                     # Generate speech with the TTS model
                     logger.debug(f"Generating speech with TTS model using voice sample: {speaker_wav}")
+                    original_stdout = sys.stdout
+                    sys.stdout = io.StringIO()
+
+                    # Generate speech with the TTS model
                     self.tts.tts_to_file(
                         text=text,
                         file_path=output_path,
@@ -598,6 +616,7 @@ class VoiceCloner:
                         language=language
                     )
 
+                    sys.stdout = original_stdout
                     # Check if output file was created successfully
                     if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
                         logger.info(f"Successfully generated speech with cloned voice to: {output_path}")
