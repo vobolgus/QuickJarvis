@@ -1,7 +1,7 @@
 """
 Voice Assistant main application that integrates speech recognition,
 text analysis, and speech synthesis components with voice cloning support.
-Includes wake word detection and conversation support.
+Includes wake word detection, conversation support, and PEFT memory system.
 """
 import os
 import sys
@@ -14,7 +14,7 @@ from typing import List, Optional, Dict, Any
 from utils import logger, clean_temp_files, check_ffmpeg_installed, get_timestamp
 from recording import record_audio, DEFAULT_RECORD_SECONDS, list_audio_devices
 from transcription_cpp import WhisperCppTranscriber
-from analysis import GemmaAnalyzer
+from analysis import GemmaAnalyzer, DEFAULT_LMSTUDIO_API_URL, DEFAULT_SYSTEM_PROMPT
 from tts import TTSManager, SystemTTS, VoiceCloningTTS
 from playback import play_audio
 
@@ -54,6 +54,13 @@ DEFAULT_VOICE = None  # Default system voice or cloned voice name
 DEFAULT_LANGUAGE = "en"  # Default language
 # --- End Voice Cloning Configuration ---
 
+# --- Memory Configuration ---
+DEFAULT_MEMORY_DIR = "memory"
+MEMORY_PATH = os.path.join(DEFAULT_MEMORY_DIR, "memory.sqlite")
+# Maximum age of conversations to keep (in days)
+MEMORY_RETENTION_DAYS = 30
+# --- End Memory Configuration ---
+
 
 def play_response(response_file_path):
     """Helper to play a response audio file immediately."""
@@ -72,7 +79,7 @@ def play_response(response_file_path):
 
 def parse_arguments():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Voice Assistant with Voice Cloning")
+    parser = argparse.ArgumentParser(description="Voice Assistant with Voice Cloning and PEFT Memory")
 
     # General options
     parser.add_argument("--list-devices", action="store_true", help="List available audio devices and exit")
@@ -103,6 +110,17 @@ def parse_arguments():
                         help="Name for the new voice when adding")
     vc_group.add_argument("--remove-voice", type=str,
                         help="Name of cloned voice to remove")
+
+    # Memory options
+    memory_group = parser.add_argument_group("Memory Options")
+    memory_group.add_argument("--memory-path", type=str, default=MEMORY_PATH,
+                            help="Path to the PEFT memory database file")
+    memory_group.add_argument("--memory-stats", action="store_true",
+                            help="Show memory statistics and exit")
+    memory_group.add_argument("--prune-memory", type=int, metavar="DAYS",
+                            help=f"Prune memory older than specified days (default: {MEMORY_RETENTION_DAYS})")
+    memory_group.add_argument("--reset-memory", action="store_true",
+                            help="Start with a fresh memory (deletes existing database)")
 
     return parser.parse_args()
 
@@ -198,8 +216,8 @@ def remove_cloned_voice(tts_manager, voice_name):
 
 def main():
     """
-    Main function that runs the Voice Assistant application with wake word detection
-    and voice cloning support.
+    Main function that runs the Voice Assistant application with wake word detection,
+    voice cloning support, and PEFT memory system.
     """
     args = parse_arguments()
 
@@ -236,12 +254,80 @@ def main():
         success = remove_cloned_voice(tts_manager, args.remove_voice)
         return 0 if success else 1
 
+    # Ensure memory directory exists
+    os.makedirs(os.path.dirname(os.path.abspath(args.memory_path)), exist_ok=True)
+
+    # Handle memory reset if requested
+    if args.reset_memory and os.path.exists(args.memory_path):
+        try:
+            os.remove(args.memory_path)
+            print("🧹 Memory database reset as requested.")
+            logger.info(f"Removed memory database at {args.memory_path}")
+        except OSError as e:
+            logger.error(f"Could not remove memory database: {e}")
+            print(f"❌ Failed to reset memory database: {e}")
+
+    # Initialize Gemma analyzer with PEFT memory
+    try:
+        logger.debug("Initializing Gemma analyzer with PEFT memory...")
+        analyzer = GemmaAnalyzer(
+            api_url=DEFAULT_LMSTUDIO_API_URL,
+            system_prompt=DEFAULT_SYSTEM_PROMPT,
+            memory_path=args.memory_path
+        )
+    except Exception as e:
+        logger.error(f"Failed to initialize GemmaAnalyzer with PEFT memory: {e}")
+        print("ERROR: Gemma analyzer with PEFT memory setup failed.")
+        return 1
+
+    # Handle memory stats display if requested
+    if args.memory_stats:
+        try:
+            stats = analyzer.get_memory_stats()
+            print("\n📊 PEFT Memory Statistics 📊")
+            print(f"Total conversations: {stats.get('conversation_count', 0)}")
+            print(f"Total messages: {stats.get('message_count', 0)}")
+            print(f"Total features indexed: {stats.get('feature_count', 0)}")
+
+            # Show sentiment distribution if available
+            sentiment_dist = stats.get('sentiment_distribution', {})
+            if sentiment_dist:
+                print("\nSentiment Distribution:")
+                for sentiment, count in sentiment_dist.items():
+                    print(f"  • {sentiment}: {count}")
+
+            # Show top intents if available
+            top_intents = stats.get('top_intents', {})
+            if top_intents:
+                print("\nTop Intents:")
+                for intent, count in top_intents.items():
+                    print(f"  • {intent}: {count}")
+
+            return 0
+        except Exception as e:
+            logger.error(f"Error displaying memory stats: {e}")
+            print(f"Error displaying memory stats: {e}")
+            return 1
+
+    # Handle memory pruning if requested
+    if args.prune_memory is not None:
+        days = args.prune_memory
+        try:
+            pruned_count = analyzer.prune_old_conversations(days)
+            print(f"🧹 Pruned {pruned_count} conversations older than {days} days.")
+            return 0
+        except Exception as e:
+            logger.error(f"Error pruning memory: {e}")
+            print(f"Error pruning memory: {e}")
+            return 1
+
     print(f"\n🎤 Voice Assistant Activated. Wake word: '{WAKE_WORD.upper()}' 🎤")
     if args.tts_type == "cloned" and args.voice:
         print(f"📢 Using cloned voice: '{args.voice}'")
     logger.debug(f"Using WHISPER_CPP_DIR: {WHISPER_CPP_DIR}")
     logger.debug(f"Using WHISPER_CLI_PATH: {WHISPER_CLI_PATH}")
     logger.debug(f"Using MODEL_PATH: {MODEL_PATH}")
+    logger.debug(f"Using MEMORY_PATH: {args.memory_path}")
     logger.info(f"Wake word detection will use Voice Activity Detection (VAD) with a max duration of {WAKE_WORD_RECORD_SECONDS}s.")
     logger.info("Transcription of detected speech for wake word is still CPU-intensive. A dedicated wake word engine is recommended for real-world use.")
     logger.info(f"Command recording will use Voice Activity Detection (VAD) with a max duration of {COMMAND_MAX_DURATION_SECONDS}s.")
@@ -249,6 +335,14 @@ def main():
 
     if not check_ffmpeg_installed():
         return 1
+
+    # Automatically prune old conversations
+    try:
+        pruned_count = analyzer.prune_old_conversations(MEMORY_RETENTION_DAYS)
+        if pruned_count > 0:
+            logger.info(f"Pruned {pruned_count} conversations older than {MEMORY_RETENTION_DAYS} days")
+    except Exception as e:
+        logger.warning(f"Error during automatic memory pruning: {e}")
 
     response_files = []  # Keep track of response files for cleanup
 
@@ -269,7 +363,6 @@ def main():
             return 1
         logger.debug("whisper.cpp transcriber initialized.")
 
-        analyzer = GemmaAnalyzer()
         lmstudio_available = analyzer.check_connection()
         if not lmstudio_available:
             logger.warning("Could not connect to LMStudio API.")
@@ -310,6 +403,11 @@ def main():
             # Check if the wake word is in the transcribed chunk
             if WAKE_WORD.lower() in transcription_chunk:
                 print(f"✨ Wake word '{WAKE_WORD.upper()}' detected!")
+
+                # Start a new conversation in memory
+                analyzer.start_new_conversation()
+                logger.debug("Started new conversation in PEFT memory")
+
                 if WAKE_WORD_ACTIVATION_SOUND:
                     ack_speech_file = tts_manager.generate_speech(WAKE_WORD_ACTIVATION_SOUND)
                     if ack_speech_file:
@@ -356,7 +454,18 @@ def main():
 
                     # Check for exit command
                     if current_transcribed_text.strip().lower() == "exit":
-                        print("Exit command received. Shutting down...")
+                        print("Exit command received.")
+
+                        # Show brief memory stats
+                        try:
+                            stats = analyzer.get_memory_stats()
+                            print(f"\nMemory Statistics:")
+                            print(f"• Conversations: {stats.get('conversation_count', 0)}")
+                            print(f"• Total messages: {stats.get('message_count', 0)}")
+                        except Exception:
+                            pass  # Silently ignore errors in stats during exit
+
+                        print("Shutting down...")
                         farewell_speech_file = tts_manager.generate_speech("Goodbye!")
                         if farewell_speech_file:
                             response_files.append(farewell_speech_file)
@@ -463,6 +572,45 @@ def main():
                         if temp_speech_file:
                             response_files.append(temp_speech_file)
                             # Play the response
+                            play_response(temp_speech_file)
+                    # Memory-specific commands
+                    elif "show memory stats" in current_transcribed_text.lower() or "memory statistics" in current_transcribed_text.lower():
+                        try:
+                            stats = analyzer.get_memory_stats()
+                            memory_stats_text = (
+                                f"Memory statistics: {stats.get('conversation_count', 0)} conversations, "
+                                f"{stats.get('message_count', 0)} messages, and "
+                                f"{stats.get('feature_count', 0)} indexed features."
+                            )
+
+                            # Add sentiment info if available
+                            sentiment_dist = stats.get('sentiment_distribution', {})
+                            if sentiment_dist:
+                                sentiment_info = ", ".join([f"{sentiment}: {count}" for sentiment, count in sentiment_dist.items()])
+                                memory_stats_text += f" Sentiment distribution: {sentiment_info}."
+
+                            print(f"ASSISTANT: {memory_stats_text}")
+                            temp_speech_file = tts_manager.generate_speech(memory_stats_text)
+                            if temp_speech_file:
+                                response_files.append(temp_speech_file)
+                                # Play the response
+                                play_response(temp_speech_file)
+                        except Exception as e:
+                            logger.error(f"Error getting memory stats: {e}")
+                            assistant_response_text = "I had trouble retrieving memory statistics."
+                            print(f"ASSISTANT: {assistant_response_text}")
+                            temp_speech_file = tts_manager.generate_speech(assistant_response_text)
+                            if temp_speech_file:
+                                response_files.append(temp_speech_file)
+                                play_response(temp_speech_file)
+                    elif "clear memory" in current_transcribed_text.lower() or "reset memory" in current_transcribed_text.lower() or "forget everything" in current_transcribed_text.lower():
+                        print("Starting new conversation in memory...")
+                        analyzer.start_new_conversation()
+                        assistant_response_text = "I've started a new conversation. Previous context has been archived."
+                        print(f"ASSISTANT: {assistant_response_text}")
+                        temp_speech_file = tts_manager.generate_speech(assistant_response_text)
+                        if temp_speech_file:
+                            response_files.append(temp_speech_file)
                             play_response(temp_speech_file)
                     else:
                         # Process normal command with Gemma
