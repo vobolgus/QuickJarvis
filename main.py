@@ -16,6 +16,7 @@ from recording import record_audio, DEFAULT_RECORD_SECONDS, list_audio_devices
 from transcription_cpp import WhisperCppTranscriber
 from analysis import GemmaAnalyzer
 from tts import TTSManager, SystemTTS, VoiceCloningTTS
+from playback import play_audio
 
 # --- Configuration for whisper.cpp ---
 DEFAULT_WHISPER_CPP_DIR = os.path.expanduser("~/dev/whisper.cpp")
@@ -52,6 +53,21 @@ DEFAULT_TTS_TYPE = "system"  # "system" or "cloned"
 DEFAULT_VOICE = None  # Default system voice or cloned voice name
 DEFAULT_LANGUAGE = "en"  # Default language
 # --- End Voice Cloning Configuration ---
+
+
+def play_response(response_file_path):
+    """Helper to play a response audio file immediately."""
+    if response_file_path:
+        try:
+            success = play_audio(response_file_path)
+            if not success:
+                logger.warning(f"Failed to play audio file: {response_file_path}")
+                print("[Audio playback failed - check your audio settings]")
+            return response_file_path
+        except Exception as e:
+            logger.error(f"Error during audio playback: {e}")
+            print("[Audio playback error - see logs for details]")
+    return response_file_path
 
 
 def parse_arguments():
@@ -297,7 +313,9 @@ def main():
                 if WAKE_WORD_ACTIVATION_SOUND:
                     ack_speech_file = tts_manager.generate_speech(WAKE_WORD_ACTIVATION_SOUND)
                     if ack_speech_file:
-                        response_files.append(ack_speech_file) # Add TTS marker file
+                        response_files.append(ack_speech_file)
+                        # Play the activation sound
+                        play_response(ack_speech_file)
 
                 # --- Start of Conversation Turn: Get Initial Command ---
                 print(f"👂 Listening for your command (VAD, max {COMMAND_MAX_DURATION_SECONDS}s)...")
@@ -341,7 +359,9 @@ def main():
                         print("Exit command received. Shutting down...")
                         farewell_speech_file = tts_manager.generate_speech("Goodbye!")
                         if farewell_speech_file:
-                             response_files.append(farewell_speech_file)
+                            response_files.append(farewell_speech_file)
+                            # Play the farewell message
+                            play_response(farewell_speech_file)
                         return 0 # Exit main function successfully
 
                     # Check for voice cloning commands in the transcription
@@ -353,6 +373,8 @@ def main():
                         temp_speech_file = tts_manager.generate_speech(assistant_response_text)
                         if temp_speech_file:
                             response_files.append(temp_speech_file)
+                            # Play the response
+                            play_response(temp_speech_file)
                     elif "use cloned voice" in current_transcribed_text.lower():
                         # Extract voice name from command
                         parts = current_transcribed_text.lower().split("use cloned voice")
@@ -381,6 +403,8 @@ def main():
                         temp_speech_file = tts_manager.generate_speech(assistant_response_text)
                         if temp_speech_file:
                             response_files.append(temp_speech_file)
+                            # Play the response
+                            play_response(temp_speech_file)
                     elif "clone my voice" in current_transcribed_text.lower() or "add my voice" in current_transcribed_text.lower():
                         print("Starting voice cloning process...")
                         assistant_response_text = "I'll clone your voice. Please speak for 10 seconds after the beep."
@@ -388,6 +412,8 @@ def main():
                         temp_speech_file = tts_manager.generate_speech(assistant_response_text)
                         if temp_speech_file:
                             response_files.append(temp_speech_file)
+                            # Play the response
+                            play_response(temp_speech_file)
 
                         # Record a longer sample for voice cloning
                         time.sleep(1)  # Short pause before recording
@@ -421,6 +447,8 @@ def main():
                         temp_speech_file = tts_manager.generate_speech(assistant_response_text)
                         if temp_speech_file:
                             response_files.append(temp_speech_file)
+                            # Play the response
+                            play_response(temp_speech_file)
                     elif "list voices" in current_transcribed_text.lower():
                         voices = tts_manager.list_available_voices(tts_type="cloned")
                         voice_names = [v["name"] for v in voices]
@@ -434,6 +462,8 @@ def main():
                         temp_speech_file = tts_manager.generate_speech(assistant_response_text)
                         if temp_speech_file:
                             response_files.append(temp_speech_file)
+                            # Play the response
+                            play_response(temp_speech_file)
                     else:
                         # Process normal command with Gemma
                         if lmstudio_available:
@@ -451,6 +481,8 @@ def main():
                         temp_speech_file = tts_manager.generate_speech(assistant_response_text)
                         if temp_speech_file:
                             response_files.append(temp_speech_file)
+                            # Play the response
+                            play_response(temp_speech_file)
                         else:
                             logger.error("Failed to generate speech response.")
 
